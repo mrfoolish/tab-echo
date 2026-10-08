@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tab Echo - Closed tabs</title>
+    <link rel="stylesheet" href="dashboard.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <header class="brand">
+          <img src="icons/icon-32.png" alt="" width="28" height="28">
+          <div><strong>Tab Echo</strong><span id="modeLabel">Regular window · Closed tabs</span></div>
+        </header>
+        <nav id="dashboardNav" class="nav-list" aria-label="Dashboard">
+          <button type="button" data-view="history" aria-current="page"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7h8a4 4 0 0 1 0 8H8"/><path d="m7 4-3 3 3 3"/></svg><span data-i18n="closedTabs">Closed tabs</span></button>
+          <button type="button" data-view="trash"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2m-7 0 1 10h8l1-10M8 9v4m4-4v4"/></svg><span data-i18n="trash">Trash</span></button>
+          <button type="button" data-view="settings"><svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.5"/><path d="M10 3.5v2m0 9v2m6.5-6.5h-2m-9 0h-2m11.1-4.6-1.4 1.4m-6.4 6.4-1.4 1.4m9.2 0-1.4-1.4M6.8 6.8 5.4 5.4"/></svg><span data-i18n="settings">Settings</span></button>
+        </nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <label class="search-field" for="searchInput">
+            <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4 4"/></svg>
+            <span class="visually-hidden" data-i18n="searchLabel">Search closed tabs</span>
+            <input id="searchInput" type="search" autocomplete="off" placeholder="Search titles or URLs" data-i18n-placeholder="searchPlaceholder">
+            <kbd aria-hidden="true">/</kbd>
+          </label>
+          <button id="retryButton" class="secondary-button" type="button" hidden>Retry</button>
+        </header>
+
+        <p id="migrationNotice" class="migration-notice" role="status" aria-live="polite" hidden></p>
+        <p id="statusMessage" class="status" role="status" aria-live="polite"></p>
+        <section id="historyView" class="view-panel" aria-labelledby="historyTitle">
+          <div class="view-heading">
+            <div><h1 id="historyTitle" data-i18n="closedTabs">Closed tabs</h1><p id="resultSummary">Loading…</p></div>
+            <div class="history-heading-actions">
+              <div id="historyLayoutToggle" class="segmented-control" role="group" aria-label="History layout">
+                <button type="button" data-history-layout="list" aria-pressed="true" data-i18n="defaultList">Default list</button>
+                <button type="button" data-history-layout="domain" aria-pressed="false" data-i18n="byDomain">By domain</button>
+              </div>
+              <button id="moveHistoryButton" class="move-history-button" type="button" disabled>
+                <span class="trash-glyph" aria-hidden="true"></span><span id="moveHistoryLabel">Move all records</span>
+              </button>
+              <button id="removeHistoryButton" class="secondary-button danger-text-button" type="button" disabled>Remove all</button>
+            </div>
+          </div>
+          <div id="historyRemovePanel" class="destructive-confirmation" role="alert" hidden>
+            <p id="historyRemoveMessage"></p>
+            <div class="confirmation-actions"><button id="confirmHistoryRemoveButton" class="danger-button" type="button">Confirm removal</button><button id="cancelHistoryRemoveButton" class="secondary-button" type="button">Cancel</button></div>
+          </div>
+          <section id="historyList" class="history-list" aria-label="Closed tabs" aria-busy="true">
+            <div class="loading-state"><span></span><span></span><span></span></div>
+          </section>
+          <section id="domainHistoryView" class="domain-history-layout" aria-label="Closed tabs by domain" hidden>
+            <nav id="domainIndex" class="domain-index" aria-label="Domains"><div class="domain-index-list"></div></nav>
+            <section id="domainHistoryList" class="history-list" aria-label="Selected domain closed tabs"></section>
+          </section>
+          <footer id="pagination" class="pager" aria-label="History pagination">
+            <label><span data-i18n="perPage">Per page</span>
+              <select id="pageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select>
+            </label>
+            <span id="pageSummary" aria-live="polite">Page 1 of 1</span>
+            <button id="prevPageButton" type="button" class="secondary-button" data-i18n="previous">Previous</button>
+            <button id="nextPageButton" type="button" class="secondary-button" data-i18n="next">Next</button>
+          </footer>
+        </section>
+
+        <section id="trashView" class="view-panel" aria-labelledby="trashTitle" hidden>
+          <div class="view-heading">
+            <div><h1 id="trashTitle" data-i18n="trash">Trash</h1><p id="trashResultSummary">Loading…</p></div>
+            <div class="bulk-actions">
+              <button id="restoreTrashResultsButton" class="secondary-button" type="button" disabled data-i18n="restoreResults">Move all back to Closed tabs</button>
+              <button id="emptyTrashButton" class="secondary-button" type="button" disabled data-i18n="emptyTrash">Empty Trash</button>
+            </div>
+          </div>
+          <div id="trashEmptyPanel" class="destructive-confirmation" role="alert" hidden>
+            <p id="trashEmptyMessage"></p>
+            <div class="confirmation-actions"><button id="confirmEmptyTrashButton" class="danger-button" type="button">Confirm emptying</button><button id="cancelEmptyTrashButton" class="secondary-button" type="button">Cancel</button></div>
+          </div>
+          <section id="trashList" class="history-list" aria-label="Trash" aria-busy="true" tabindex="-1"><div class="loading-state"><span></span><span></span><span></span></div></section>
+          <footer id="trashPagination" class="pager" aria-label="Trash pagination">
+            <label><span data-i18n="perPage">Per page</span><select id="trashPageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
+            <span id="trashPageSummary" aria-live="polite">Page 1 of 1</span>
+            <button id="trashPrevPageButton" type="button" class="secondary-button" data-i18n="previous">Previous</button>
+            <button id="trashNextPageButton" type="button" class="secondary-button" data-i18n="next">Next</button>
+          </footer>
+        </section>
+
+        <section id="settingsView" class="view-panel" aria-labelledby="settingsTitle" hidden>
+          <div class="view-heading"><div><h1 id="settingsTitle" data-i18n="settings">Settings</h1><p id="settingsSummary" data-i18n="settingsIntro">Control retention for this extension.</p></div></div>
+          <form id="settingsForm" class="settings-form" aria-busy="true">
+            <p id="settingsScope" class="settings-scope"></p>
+            <h2 data-i18n="retentionSection">Storage and cleanup</h2>
+            <div class="settings-section settings-retention">
+            <label><span data-i18n="maxRecords">Maximum records</span><input name="maxRecords" type="text" inputmode="numeric" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="alert"></small></label>
+            <label><span data-i18n="maxAgeDays">History retention (days)</span><input name="maxAgeDays" type="text" inputmode="numeric" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="alert"></small></label>
+            <label><span data-i18n="trashMaxAgeDays">Trash retention (days)</span><input name="trashMaxAgeDays" type="text" inputmode="numeric" placeholder="3" aria-describedby="trashAgeHelp trashMaxAgeDaysError"><small id="trashAgeHelp" data-i18n="trashAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="trashMaxAgeDaysError" class="field-error" role="alert"></small></label>
+            </div>
+            <h2 data-i18n="displaySection">Popup display</h2>
+            <div class="settings-section">
+            <label><span data-i18n="popupSize">Entries shown in popup</span><input name="popupSize" type="text" inputmode="numeric" placeholder="10" aria-describedby="popupSizeHelp popupSizeError"><small id="popupSizeHelp" data-i18n="popupSizeHelp">Enter an integer from 1 to 200.</small><small id="popupSizeError" class="field-error" role="alert"></small></label>
+            </div>
+            <h2 data-i18n="appearanceSection">Appearance and language</h2>
+            <div class="settings-section">
+            <label><span data-i18n="language">Language</span><select name="language"><option value="en" data-i18n="languageEnglish">English</option><option value="zh" data-i18n="languageChinese">简体中文</option></select></label>
+            <label><span data-i18n="theme">Theme</span><select name="theme"><option value="system" data-i18n="themeSystem">System</option><option value="light" data-i18n="themeLight">Light</option><option value="dark" data-i18n="themeDark">Dark</option></select></label>
+            </div>
+            <h2 data-i18n="exclusionsSection">Excluded domains</h2>
+            <section class="domain-exclusions" aria-labelledby="excludedDomainsLabel">
+              <label for="excludedDomainsInput"><span id="excludedDomainsLabel" data-i18n="excludedDomains">Excluded domains</span></label>
+              <textarea id="excludedDomainsInput" name="excludedDomains" rows="4" placeholder="example.com" aria-describedby="excludedDomainsHelp"></textarea>
+              <small id="excludedDomainsHelp" data-i18n="excludedDomainsHelp">One domain per line. A domain also excludes its subdomains. New rules only affect future closed tabs.</small>
+            </section>
+            <div id="settingsImpactPanel" class="settings-impact" role="alert" hidden>
+              <p id="settingsImpactMessage"></p>
+              <div class="settings-impact-actions">
+                <button id="confirmSettingsButton" type="button" class="primary-button" disabled data-i18n="confirmAndSave">Confirm and save</button>
+                <button id="confirmSettingsAndRemoveButton" type="button" class="danger-button" hidden>Save and remove</button>
+                <button id="cancelSettingsImpactButton" type="button" class="secondary-button" data-i18n="cancel">Cancel</button>
+              </div>
+            </div>
+            <button id="saveSettingsButton" type="submit" class="primary-button" disabled data-i18n="saveSettings">Save settings</button>
+          </form>
+        </section>
+      </main>
+    </div>
+    <script src="lib/domain-groups.js"></script>
+    <script src="lib/time-format.js"></script>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

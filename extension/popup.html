@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tab Echo</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="app-header">
+        <div class="brand-row">
+          <div class="brand-copy">
+            <h1>Tab Echo</h1>
+            <p id="modeLabel" class="mode-label">Regular window · Closed tabs</p>
+          </div>
+          <div class="header-actions">
+            <button id="trashButton" class="header-button" type="button" data-i18n-title="trash" data-i18n-aria="openTrash">
+              <span data-i18n="trash">Trash</span><span id="trashCount" class="count-badge">0</span>
+            </button>
+            <button id="settingsButton" class="icon-button" type="button" data-i18n-title="settings" data-i18n-aria="settings"><svg class="ui-icon settings-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h5m4 0h3M9 3v4m-5 3h9m3 0h0M13 8v4m-9 3h3m4 0h5M7 13v4"/></svg></button>
+          </div>
+        </div>
+        <div class="search-row">
+          <label class="search-field" for="searchInput">
+            <span class="visually-hidden" data-i18n="searchLabel">Search closed tabs</span>
+            <svg class="search-icon ui-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4 4"/></svg>
+            <input id="searchInput" type="search" placeholder="Search title or web address" autocomplete="off" data-i18n-placeholder="searchPlaceholder">
+            <kbd class="search-key" aria-hidden="true">/</kbd>
+          </label>
+        </div>
+        <div class="summary-row">
+          <span id="resultSummary">0 records (including Groups)</span>
+          <div class="summary-actions"><button id="bulkMoveButton" class="bulk-move-button" type="button" aria-label="Move the 0 shown entries to Trash" disabled><span class="trash-glyph" aria-hidden="true"></span><span id="bulkMoveLabel">Move to Trash (0)</span></button><div id="bulkRemoveMenuWrap" class="remove-menu-wrap"><button id="bulkRemoveButton" class="text-button danger-text-button" type="button" aria-haspopup="true" aria-expanded="false" disabled>Remove now</button><div id="bulkRemoveMenu" class="remove-menu" hidden><button id="removeShownButton" type="button">Remove shown (0)</button><button id="removeAllButton" type="button">Remove all</button></div></div></div>
+        </div>
+      </header>
+      <div id="bulkRemovePanel" class="destructive-confirmation" role="alert" hidden><p id="bulkRemoveMessage"></p><div class="confirmation-actions"><button id="confirmBulkRemoveButton" class="danger-button" type="button">Confirm removal</button><button id="cancelBulkRemoveButton" class="text-button" type="button">Cancel</button></div></div>
+      <p id="migrationNotice" class="migration-notice" role="status" aria-live="polite" hidden></p>
+      <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
+      <section id="historyList" class="history-list" aria-label="Closed tabs" data-i18n-aria="historyList" aria-busy="true">
+        <div class="loading-state" aria-hidden="true"><div></div><div></div><div></div></div>
+        <span class="visually-hidden" data-i18n="loading">Loading closed tabs</span>
+      </section>
+      <footer class="popup-footer">
+        <button id="viewAllButton" class="view-all-button" type="button">Open full list</button>
+      </footer>
+    </main>
+    <div id="actionTooltip" class="action-tooltip" role="tooltip" hidden></div>
+    <script src="lib/history-store.js"></script>
+    <script src="lib/time-format.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
