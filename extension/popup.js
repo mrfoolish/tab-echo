@@ -12,12 +12,13 @@
       modeRegular: 'Regular window · Closed tabs', modeIncognito: 'Incognito window · Closed tabs',
       searchLabel: 'Search closed tabs', searchPlaceholder: 'Search title or web address',
       settings: 'Settings', trash: 'Trash', openTrash: 'Open Trash', historyList: 'Closed tabs', loading: 'Loading closed tabs',
-      results: '{count} records (including Groups)', matches: '{count} matching entries', openFullList: 'Open full list', viewAll: 'View all {count} results',
+      results: '{count} records (including Groups)', resultsLimited: '{total} records · showing {shown}', matches: '{count} matching entries', matchesLimited: '{total} matching entries · showing {shown}', openFullList: 'Open full list', viewAll: 'View all {count} results',
       moveShown: 'Move to Trash ({count})', moveShownLabel: 'Move the {count} shown entries to Trash', moveOne: 'Move to Trash', reopen: 'Reopen', reopenAll: 'Reopen all',
       removeNow: 'Remove now', removeShown: 'Remove shown ({count})', removeAll: 'Remove all ({count})', removeAllResults: 'Remove all results ({count})', confirmRemoval: 'Confirm removal', cancel: 'Cancel',
       removeWarning: 'Remove all {count} matching closed records ({tabs} tabs)? This cannot be undone.', removeShownWarning: 'Remove the {count} shown closed records ({tabs} tabs)? This cannot be undone.', removed: 'Removed {count} record(s). This cannot be undone.',
       group: '{count} tabs closed together', emptyTitle: 'No closed tabs yet', emptyBody: 'Close a tab and it will appear here.',
       noMatchTitle: 'No matching tabs', noMatchBody: 'Try another title or web address.', requestFailed: 'Operation failed. Please try again.',
+      actionStale: 'Closed-tab records changed. Nothing was removed; please review and confirm again.',
       moved: 'Moved {count} to Trash.', reopened: 'Reopened {count} tab(s).', partial: 'Reopened {count}; {failed} failed.',
       trashUnavailable: 'Trash count unavailable',
       groupMatch: '{matched} of {total} tabs match', storageWriteFailed: 'Could not save data to browser storage. Check available space and try again.',
@@ -27,12 +28,13 @@
       modeRegular: '常规窗口 · 已关闭标签页', modeIncognito: '无痕窗口 · 已关闭标签页',
       searchLabel: '搜索已关闭标签页', searchPlaceholder: '搜索标题或网址',
       settings: '设置', trash: '回收站', openTrash: '打开回收站', historyList: '已关闭标签页', loading: '正在加载关闭记录',
-      results: '{count} 条记录（含标签组）', matches: '{count} 条匹配记录', openFullList: '打开完整列表', viewAll: '查看全部 {count} 条结果',
+      results: '{count} 条记录（含标签组）', resultsLimited: '{total} 条记录 · 显示 {shown} 条', matches: '{count} 条匹配记录', matchesLimited: '{total} 条匹配 · 显示 {shown} 条', openFullList: '打开完整列表', viewAll: '查看全部 {count} 条结果',
       moveShown: '移入回收站（{count}）', moveShownLabel: '将当前显示的 {count} 条记录移至回收站', moveOne: '移至回收站', reopen: '重新打开', reopenAll: '全部重新打开',
       removeNow: '直接移除', removeShown: '移除当前显示的 {count} 条', removeAll: '全部移除（{count}）', removeAllResults: '移除全部搜索结果（{count}）', confirmRemoval: '确认移除', cancel: '取消',
       removeWarning: '将直接移除当前条件下的全部 {count} 条关闭记录（{tabs} 个标签页），无法恢复。', removeShownWarning: '将直接移除当前显示的 {count} 条关闭记录（{tabs} 个标签页），无法恢复。', removed: '已直接移除 {count} 条记录，无法恢复。',
       group: '同时关闭的 {count} 个标签页', emptyTitle: '暂无关闭记录', emptyBody: '关闭标签页后，可在这里快速重新打开。',
       noMatchTitle: '未找到匹配的标签页', noMatchBody: '试试其他页面标题或部分网址。', requestFailed: '操作失败，请重试。',
+      actionStale: '关闭记录已发生变化，本次没有移除任何内容，请重新确认。',
       moved: '已将 {count} 条移至回收站。', reopened: '已重新打开 {count} 个标签页。', partial: '已重新打开 {count} 个；{failed} 个失败。',
       trashUnavailable: '回收站数量不可用',
       groupMatch: '命中 {matched} / {total} 个标签页', storageWriteFailed: '无法将数据保存到浏览器存储空间，请检查可用空间后重试。',
@@ -51,12 +53,35 @@
   }
 
   function errorMessage(error) {
+    if (error && ['ACTION_STALE', 'ACTION_TOKEN_INVALID', 'ACTION_TOKEN_EXPIRED'].includes(error.code)) return t('actionStale');
     return t(error && error.code === 'STORAGE_WRITE_FAILED' ? 'storageWriteFailed' : 'requestFailed');
   }
 
   function popupSize(settings = state.settings) {
     const value = Number(settings && settings.popupSize);
     return Number.isSafeInteger(value) && value >= 1 && value <= MAX_POPUP_SIZE ? value : DEFAULT_POPUP_SIZE;
+  }
+
+  function readStatistics(response, results = []) {
+    const source = response && response.statistics;
+    const count = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isSafeInteger(number) && number >= 0 ? number : fallback;
+    };
+    if (source && typeof source === 'object') {
+      return {
+        revision: count(source.revision), totalRecords: count(source.totalRecords), totalTabs: count(source.totalTabs),
+        matchingRecords: count(source.matchingRecords), matchingTabs: count(source.matchingTabs),
+        resultTabs: count(source.resultTabs), displayedRecords: count(source.displayedRecords),
+      };
+    }
+    return {
+      revision: count(response && response.revision), totalRecords: count(response && response.totalEventCount, count(response && response.resultEventCount)),
+      totalTabs: count(response && response.totalTabCount, count(response && response.resultTabCount)), matchingRecords: count(response && response.resultEventCount),
+      matchingTabs: count(response && response.matchedTabCount),
+      resultTabs: count(response && response.resultTabCount, results.reduce((sum, result) => sum + count(result && result.totalTabCount), 0)),
+      displayedRecords: results.length,
+    };
   }
 
   function collectElements(doc) {
@@ -68,6 +93,7 @@
     elements = collectElements(root.document);
     clearRemovalConfirmation();
     bindEvents();
+    elements.searchInput.focus();
     const noticeRequest = sendMessage({ type: 'get-migration-notice' }).catch(() => null);
     const settingsResponse = await sendMessage({ type: 'get-settings' }).catch(() => null);
     if (settingsResponse && settingsResponse.settings) {
@@ -146,10 +172,11 @@
       state.mode = history.mode || state.mode;
       if (!state.settings) state.settings = history.settings || null;
       state.results = (Array.isArray(history.results) ? history.results : []).slice(0, popupSize());
-      state.totalRecords = Number(history.totalEventCount) || 0;
-      state.totalTabs = Number(history.totalTabCount) || 0;
-      state.totalResults = Number(history.resultEventCount) || 0;
-      state.totalResultTabs = Number(history.resultTabCount) || state.results.reduce((sum, result) => sum + (Number(result.totalTabCount) || 0), 0);
+      const counts = readStatistics(history, state.results);
+      state.totalRecords = counts.totalRecords;
+      state.totalTabs = counts.totalTabs;
+      state.totalResults = counts.matchingRecords;
+      state.totalResultTabs = counts.resultTabs;
       state.loadedQuery = requestedQuery;
       applyPreferences();
       showStatus('');
@@ -162,7 +189,7 @@
       state.loadedQuery = null;
     }
     if (trashResult.status === 'fulfilled') {
-      state.trashCount = Number(trashResult.value.resultEventCount) || 0;
+      state.trashCount = readStatistics(trashResult.value, trashResult.value.results).matchingRecords;
       state.trashAvailable = true;
     } else {
       state.trashAvailable = false;
@@ -177,7 +204,11 @@
   function render() {
     const shown = state.results.length;
     elements.modeLabel.textContent = t(state.mode === 'incognito' ? 'modeIncognito' : 'modeRegular');
-    elements.resultSummary.textContent = t(state.query.trim() ? 'matches' : 'results', { count: state.query.trim() ? state.totalResults : state.totalRecords });
+    const total = state.query.trim() ? state.totalResults : state.totalRecords;
+    const summaryKey = state.query.trim()
+      ? (shown < total ? 'matchesLimited' : 'matches')
+      : (shown < total ? 'resultsLimited' : 'results');
+    elements.resultSummary.textContent = t(summaryKey, { count: total, total, shown });
     elements.trashCount.textContent = state.trashAvailable ? String(state.trashCount) : '—';
     elements.trashButton.title = state.trashAvailable ? t('trash') : t('trashUnavailable');
     elements.trashButton.setAttribute('aria-label', state.trashAvailable ? t('openTrash') : t('trashUnavailable'));
@@ -333,27 +364,37 @@
     if (restoreFocus) elements.bulkRemoveButton.focus();
   }
 
-  function showRemovalConfirmation(scope = 'all') {
+  async function showRemovalConfirmation(scope = 'all') {
     const query = state.query.trim();
     const selection = state.results;
-    const shownTabs = selection.reduce((sum, result) => sum + (Number(result.totalTabCount) || 0), 0);
-    const count = scope === 'shown' ? selection.length : (query ? state.totalResults : state.totalRecords);
-    const tabCount = scope === 'shown' ? shownTabs : (query ? state.totalResultTabs : state.totalTabs);
-    if (!resultsCurrent() || !count) return;
+    const expectedCount = scope === 'shown' ? selection.length : (query ? state.totalResults : state.totalRecords);
+    if (!resultsCurrent() || !expectedCount || state.pending.has('prepare-removal')) return;
     closeRemoveMenu();
-    state.pendingRemoval = { query, count, tabCount, scope, eventIds: scope === 'shown' ? selection.map((result) => result.event.id) : null };
-    elements.bulkRemoveMessage.textContent = t(scope === 'shown' ? 'removeShownWarning' : 'removeWarning', { count, tabs: tabCount });
-    elements.confirmBulkRemoveButton.textContent = t('confirmRemoval'); elements.cancelBulkRemoveButton.textContent = t('cancel');
-    elements.bulkRemovePanel.hidden = false; elements.confirmBulkRemoveButton.focus();
+    const requestToken = state.requestToken;
+    const request = scope === 'shown'
+      ? { type: 'prepare-destructive-action', operation: 'delete-history', eventIds: selection.map((result) => result.event.id) }
+      : { type: 'prepare-destructive-action', operation: 'delete-history', all: true, query };
+    state.pending.add('prepare-removal'); render();
+    try {
+      const prepared = await sendMessage(request);
+      if (!resultsCurrent() || requestToken !== state.requestToken || query !== state.query.trim()) return;
+      state.pendingRemoval = { token: prepared.token, count: prepared.eventCount, tabCount: prepared.tabCount, scope };
+      elements.bulkRemoveMessage.textContent = t(scope === 'shown' ? 'removeShownWarning' : 'removeWarning', {
+        count: prepared.eventCount, tabs: prepared.tabCount,
+      });
+      elements.confirmBulkRemoveButton.textContent = t('confirmRemoval'); elements.cancelBulkRemoveButton.textContent = t('cancel');
+      elements.bulkRemovePanel.hidden = false; elements.confirmBulkRemoveButton.focus();
+    } catch (error) {
+      showStatus(errorMessage(error), true);
+    } finally {
+      state.pending.delete('prepare-removal'); render();
+    }
   }
 
   async function confirmRemoval() {
-    const pending = state.pendingRemoval; if (!pending || !resultsCurrent() || pending.query !== state.query.trim()) return;
+    const pending = state.pendingRemoval; if (!pending || !resultsCurrent()) return;
     clearRemovalConfirmation();
-    const message = pending.scope === 'shown'
-      ? { type: 'permanently-delete-history', eventIds: pending.eventIds }
-      : { type: 'permanently-delete-history', all: true, query: pending.query };
-    await mutate(message, 'remove-results', 'deleted');
+    await mutate({ type: 'commit-destructive-action', token: pending.token }, 'remove-results', 'deleted');
   }
 
   async function mutate(message, key, countField) {
@@ -399,6 +440,8 @@
   }
   function showStatus(message, error = false) {
     clearTimeout(state.statusTimer); state.statusError = Boolean(error);
+    elements.statusMessage.setAttribute('role', error ? 'alert' : 'status');
+    elements.statusMessage.setAttribute('aria-live', error ? 'assertive' : 'polite');
     elements.statusMessage.textContent = message; elements.statusMessage.classList.toggle('is-error', error);
     if (message && !error) state.statusTimer = setTimeout(() => { elements.statusMessage.textContent = ''; }, 5000);
   }
@@ -412,5 +455,5 @@
   }
 
   if (root.document) root.document.addEventListener('DOMContentLoaded', () => start().catch((error) => showStatus(errorMessage(error), true)));
-  return { popupSize, start, refresh, state };
+  return { popupSize, readStatistics, start, refresh, state };
 }));

@@ -156,7 +156,6 @@
         id: String(tab.id),
         title: String(tab.title || tab.url),
         url: String(tab.url),
-        faviconUrl: String(tab.favIconUrl || tab.faviconUrl || ''),
         position: Number.isInteger(tab.index) ? tab.index : 0,
         sourceWindowId: tab.windowId ?? null,
         mode,
@@ -357,7 +356,6 @@
           id: snapshot.id,
           title: snapshot.title || snapshot.url,
           url: snapshot.url,
-          faviconUrl: snapshot.faviconUrl || '',
           position: index,
           sourceWindowId: windowId,
         }));
@@ -509,6 +507,45 @@
       return { events, state: getState() };
     }
 
+    function reconcileRecoveredSession(tabs) {
+      const liveSnapshots = (Array.isArray(tabs) ? tabs : [])
+        .map(snapshotTab)
+        .filter(Boolean);
+      const liveById = new Map(liveSnapshots.map((snapshot) => [snapshot.id, snapshot]));
+      const events = [];
+
+      for (const [windowKey, windowSnapshot] of Object.entries(state.windowSnapshotsById)) {
+        const priorIds = Array.isArray(windowSnapshot.tabIds)
+          ? windowSnapshot.tabIds.map(String)
+          : [];
+        const missingIds = priorIds.filter((id) => {
+          const prior = state.tabSnapshotsById[id];
+          const live = liveById.get(id);
+          return !prior || !live
+            || String(prior.sourceWindowId) !== String(live.sourceWindowId)
+            || String(prior.url) !== String(live.url);
+        });
+        if (missingIds.length > 0) {
+          const windowId = windowSnapshot.windowId !== undefined
+            ? windowSnapshot.windowId
+            : Number(windowKey);
+          const forcedKind = missingIds.length === priorIds.length ? 'group' : undefined;
+          const event = buildEvent(missingIds, windowId, now(), forcedKind);
+          putInOutbox(event);
+          if (event) events.push(clone(event));
+          cleanupTabIds(missingIds);
+          windowSnapshot.tabIds = priorIds.filter((id) => !missingIds.includes(id));
+          if (windowSnapshot.tabIds.length === 0) delete state.windowSnapshotsById[windowKey];
+        }
+      }
+
+      // A lost browser session also loses ordinary close timers. Missing snapshots were
+      // materialized above; snapshots that still match live tabs were never closed.
+      state.pendingBatches = {};
+      hydrate(tabs);
+      return { events, state: getState() };
+    }
+
     return {
       acknowledgeEvent,
       attachTab,
@@ -522,6 +559,7 @@
       pendingWindowIds,
       removeTab,
       removeWindow,
+      reconcileRecoveredSession,
       recoverClosedWindows,
       recoverMissingWindows,
       upsertTab,

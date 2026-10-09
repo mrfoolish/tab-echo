@@ -60,6 +60,15 @@ test('created and updated tabs update snapshots', () => {
   assert.deepEqual(state.windowSnapshotsById['10'].tabIds, ['1']);
 });
 
+test('tracker does not persist favicon payloads in snapshots or closed records', () => {
+  const subject = tracker();
+  subject.hydrate([tab(1, 10, 0, { favIconUrl: `data:image/png;base64,${'x'.repeat(2048)}` })]);
+
+  assert.equal(Object.hasOwn(subject.getState().tabSnapshotsById['1'], 'faviconUrl'), false);
+  const closed = subject.removeWindow(10).event;
+  assert.equal(Object.hasOwn(closed.tabs[0], 'faviconUrl'), false);
+});
+
 test('inserting a new tab at index zero shifts existing positions without later updates reordering it', () => {
   const subject = tracker();
   subject.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
@@ -233,6 +242,60 @@ test('startup recovery records durable window snapshots missing after a forced b
   assert.equal(restarted.getState().windowSnapshotsById['10'], undefined);
 });
 
+test('session-loss reconciliation keeps tabs that still exist after an extension reload', () => {
+  const first = tracker();
+  const liveTabs = [tab(1, 10, 0), tab(2, 10, 1)];
+  first.hydrate(liveTabs);
+
+  const restarted = tracker(first.getState());
+  const reconciled = restarted.reconcileRecoveredSession(liveTabs);
+
+  assert.deepEqual(reconciled.events, []);
+  assert.deepEqual(restarted.pendingEvents(), []);
+  assert.deepEqual(restarted.getState().windowSnapshotsById['10'].tabIds, ['1', '2']);
+});
+
+test('session-loss reconciliation archives reused tab and window ids only when URLs changed', () => {
+  const first = tracker();
+  first.hydrate([
+    tab(1, 10, 0, { url: 'https://before-one.example/' }),
+    tab(2, 10, 1, { url: 'https://before-two.example/' }),
+  ]);
+
+  const restarted = tracker(first.getState());
+  const reconciled = restarted.reconcileRecoveredSession([
+    tab(1, 10, 0, { url: 'https://after-one.example/' }),
+    tab(2, 10, 1, { url: 'https://after-two.example/' }),
+  ]);
+
+  assert.equal(reconciled.events.length, 1);
+  assert.deepEqual(reconciled.events[0].tabs.map((item) => item.url), [
+    'https://before-one.example/', 'https://before-two.example/',
+  ]);
+  assert.deepEqual(restarted.getState().windowSnapshotsById['10'].tabIds, ['1', '2']);
+  assert.deepEqual(['1', '2'].map((id) => restarted.getState().tabSnapshotsById[id].url), [
+    'https://after-one.example/', 'https://after-two.example/',
+  ]);
+});
+
+test('session-loss reconciliation archives only missing tabs from a partially restored window', () => {
+  const first = tracker();
+  const one = tab(1, 10, 0);
+  const two = tab(2, 10, 1);
+  first.hydrate([one, two]);
+
+  const restarted = tracker(first.getState());
+  const firstPass = restarted.reconcileRecoveredSession([one]);
+  const secondPass = restarted.reconcileRecoveredSession([one]);
+
+  assert.equal(firstPass.events.length, 1);
+  assert.equal(firstPass.events[0].kind, 'single');
+  assert.deepEqual(firstPass.events[0].tabs.map((item) => item.id), ['2']);
+  assert.deepEqual(secondPass.events, []);
+  assert.equal(restarted.pendingEvents().length, 1);
+  assert.deepEqual(restarted.getState().windowSnapshotsById['10'].tabIds, ['1']);
+});
+
 test('generated events have independent durable commit keys until acknowledged', () => {
   const first = tracker();
   first.hydrate([tab(1, 10, 0)]);
@@ -332,13 +395,14 @@ test('consumed window ids expire after the deduplication ttl', () => {
 
 test('background loads tracker and repository and derives its partition from worker context', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
-  assert.match(source, /importScripts\(\s*'lib\/history-store\.js',[\s\S]*'lib\/storage-repository\.js',[\s\S]*'lib\/close-tracker\.js'\s*\)/);
+  assert.match(source, /importScripts\(\s*'lib\/history-store\.js',[\s\S]*'lib\/storage-repository\.js',[\s\S]*'lib\/indexeddb-repository\.js',[\s\S]*'lib\/indexeddb-migration\.js',[\s\S]*'lib\/indexeddb-storage-repository\.js',[\s\S]*'lib\/close-tracker\.js'\s*\)/);
   assert.match(source, /chrome\.extension\.inIncognitoContext\s*\?\s*'incognito'\s*:\s*'normal'/);
   assert.match(source, /tabEcho:close-tracker:.*activeMode/);
   assert.match(source, /chrome\.tabs\.onDetached\.addListener/);
   assert.match(source, /chrome\.tabs\.onAttached\.addListener/);
   assert.match(source, /if \(!result\.ignored && !result\.windowClosing\)[\s\S]*scheduleBatchFlush/);
   assert.match(source, /createTrackerPersistence/);
+  assert.match(source, /createIndexedDbStorageRepository/);
   assert.doesNotMatch(source, /storage\.local\.set\(\{\s*\[?STORAGE_KEY/);
 });
 

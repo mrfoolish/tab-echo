@@ -25,7 +25,7 @@ function createVm(responder, runtime = {}) {
       addEventListener(type, handler) { listeners[id + ':' + type] = handler; },
       setAttribute(name, data) { this[name] = String(data); }, removeAttribute(name) { delete this[name]; },
       append(...items) { this.children.push(...items); }, appendChild(item) { this.children.push(item); return item; },
-      replaceChildren(...items) { this.children = items; }, focus() {}, select() {}, closest() { return null; },
+      replaceChildren(...items) { this.children = items; }, focus() { this.focusCount = (this.focusCount || 0) + 1; }, select() {}, closest() { return null; },
       getBoundingClientRect() { return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
     };
     if (id) nodes.set(id, value); return value;
@@ -45,6 +45,16 @@ function createVm(responder, runtime = {}) {
 
 async function settle() { await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve)); }
 function flatten(node) { return [node, ...(node.children || []).flatMap(flatten)]; }
+
+test('statistics snapshots are authoritative even when an exact count is zero', () => {
+  const counts = helpers.readStatistics({
+    statistics: { revision: 4, totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0, displayedRecords: 0 },
+    totalEventCount: 99, totalTabCount: 99, resultEventCount: 99, resultTabCount: 99,
+  }, [result('legacy')]);
+  assert.deepEqual(counts, {
+    revision: 4, totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0, displayedRecords: 0,
+  });
+});
 
 test('popup is a compact quick-entry surface without paging, embedded settings, or clear-all', () => {
   for (const id of ['searchInput', 'settingsButton', 'trashButton', 'trashCount', 'historyList', 'viewAllButton']) {
@@ -76,6 +86,19 @@ test('popup is a compact quick-entry surface without paging, embedded settings, 
   assert.doesNotMatch(js, /elements\.bulkMoveButton\.title/);
   assert.match(html, /<script src="lib\/time-format\.js"><\/script>[\s\S]*<script src="popup\.js"><\/script>/);
   assert.match(css, /\.event-time\s*\{[^}]*white-space:\s*nowrap/s);
+});
+
+test('Popup focuses the search field as soon as it opens', () => {
+  const app = createVm(async () => ({ ok: true, mode: 'normal', settings: { language: 'en' }, results: [], resultEventCount: 0 }));
+
+  app.listeners['document:DOMContentLoaded']();
+
+  assert.equal(app.nodes.get('searchInput').focusCount, 1);
+});
+
+test('Popup search preserves literal queries and errors use an assertive live region', () => {
+  assert.match(html, /id="searchInput"[^>]*autocorrect="off"[^>]*autocapitalize="off"[^>]*spellcheck="false"/);
+  assert.match(js, /setAttribute\('aria-live', error \? 'assertive' : 'polite'\)/);
 });
 
 test('Popup keeps hidden menus and inline confirmations collapsed by default', () => {
@@ -290,6 +313,7 @@ test('VM renders ten of twenty-one events, total and trash counts, and explicit 
   });
   app.listeners['document:DOMContentLoaded'](); await settle();
   assert.equal(app.nodes.get('historyList').children[0].children.length, 10);
+  assert.equal(app.nodes.get('resultSummary').textContent, '21 records · showing 10');
   assert.equal(app.nodes.get('viewAllButton').textContent, 'Open full list');
   assert.equal(app.nodes.get('viewAllButton').hidden, false);
   assert.equal(app.nodes.get('trashCount').textContent, '7');
@@ -313,20 +337,23 @@ test('Popup uses raw unfiltered totals without showing a conflicting deduplicate
       ok: true, mode: 'normal', settings: { language: 'zh', popupSize: 10 }, results: visible,
       totalEventCount: 2690, totalTabCount: 2712, resultEventCount: 2008, resultTabCount: 2030,
     };
+    if (message.type === 'prepare-destructive-action') return message.query === 'needle'
+      ? { ok: true, token: 'search-token', eventCount: 8, tabCount: 9 }
+      : { ok: true, token: 'all-token', eventCount: 2690, tabCount: 2712 };
     return { ok: true };
   });
 
   app.listeners['document:DOMContentLoaded'](); await settle();
-  assert.equal(app.nodes.get('resultSummary').textContent, '2690 条记录（含标签组）');
+  assert.equal(app.nodes.get('resultSummary').textContent, '2690 条记录 · 显示 1 条');
   assert.equal(app.nodes.get('viewAllButton').textContent, '打开完整列表');
-  app.listeners['bulkRemoveButton:click'](); app.listeners['removeAllButton:click']();
+  app.listeners['bulkRemoveButton:click'](); await app.listeners['removeAllButton:click']();
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /2690 条关闭记录/);
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /2712 个标签页/);
 
   await app.context.TabEchoPopup.refresh('needle');
-  assert.equal(app.nodes.get('resultSummary').textContent, '8 条匹配记录');
+  assert.equal(app.nodes.get('resultSummary').textContent, '8 条匹配 · 显示 1 条');
   assert.equal(app.nodes.get('viewAllButton').textContent, '查看全部 8 条结果');
-  app.listeners['bulkRemoveButton:click'](); app.listeners['removeAllButton:click']();
+  app.listeners['bulkRemoveButton:click'](); await app.listeners['removeAllButton:click']();
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /8 条关闭记录/);
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /9 个标签页/);
 });
@@ -348,7 +375,8 @@ test('Popup bulk removal confirms and removes every query result beyond the disp
     if (message.type === 'get-settings') return { ok: true, settings: { language: 'zh', popupSize: 10 } };
     if (message.type === 'get-history') return { ok: true, mode: 'normal', settings: { language: 'zh', popupSize: 10 }, results, totalEventCount: 500, totalTabCount: 620, resultEventCount: 500, resultTabCount: 620 };
     if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 0 };
-    if (message.type === 'permanently-delete-history') return { ok: true, deleted: 500 };
+    if (message.type === 'prepare-destructive-action') return { ok: true, token: 'all-token', eventCount: 500, tabCount: 620 };
+    if (message.type === 'commit-destructive-action') return { ok: true, deleted: 500 };
     return { ok: true };
   });
   app.listeners['document:DOMContentLoaded'](); await settle();
@@ -356,13 +384,18 @@ test('Popup bulk removal confirms and removes every query result beyond the disp
   app.listeners['bulkRemoveButton:click']();
   assert.equal(app.nodes.get('removeShownButton').textContent, '移除当前显示的 10 条');
   assert.equal(app.nodes.get('removeAllButton').textContent, '全部移除（500）');
-  app.listeners['removeAllButton:click']();
-  assert.equal(app.messages.some((message) => message.type === 'permanently-delete-history'), false);
+  await app.listeners['removeAllButton:click']();
+  assert.equal(app.messages.some((message) => message.type === 'commit-destructive-action'), false);
   assert.equal(app.nodes.get('bulkRemovePanel').hidden, false);
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /500 条关闭记录/);
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /620 个标签页/);
   await app.listeners['confirmBulkRemoveButton:click']();
-  assert.deepEqual(app.messages.find((message) => message.type === 'permanently-delete-history'), { type: 'permanently-delete-history', all: true, query: '' });
+  assert.deepEqual(app.messages.find((message) => message.type === 'prepare-destructive-action'), {
+    type: 'prepare-destructive-action', operation: 'delete-history', all: true, query: '',
+  });
+  assert.deepEqual(app.messages.find((message) => message.type === 'commit-destructive-action'), {
+    type: 'commit-destructive-action', token: 'all-token',
+  });
 });
 
 test('Popup loads the latest settings before applying its display limit', async () => {
@@ -393,18 +426,22 @@ test('Popup removal menu can remove only the shown records', async () => {
     if (message.type === 'get-settings') return { ok: true, settings: { language: 'zh', popupSize: 10 } };
     if (message.type === 'get-history') return { ok: true, mode: 'normal', settings: { language: 'zh', popupSize: 10 }, results, totalEventCount: 200, totalTabCount: 220, resultEventCount: 200, resultTabCount: 220 };
     if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 0 };
-    if (message.type === 'permanently-delete-history') return { ok: true, deleted: 10 };
+    if (message.type === 'prepare-destructive-action') return { ok: true, token: 'shown-token', eventCount: 10, tabCount: 10 };
+    if (message.type === 'commit-destructive-action') return { ok: true, deleted: 10 };
     return { ok: true };
   });
   app.listeners['document:DOMContentLoaded'](); await settle();
   app.listeners['bulkRemoveButton:click']();
   assert.equal(app.nodes.get('bulkRemoveMenu').hidden, false);
-  app.listeners['removeShownButton:click']();
+  await app.listeners['removeShownButton:click']();
   assert.equal(app.nodes.get('bulkRemoveMenu').hidden, true);
   assert.match(app.nodes.get('bulkRemoveMessage').textContent, /当前显示的 10 条/);
   await app.listeners['confirmBulkRemoveButton:click']();
-  assert.deepEqual(app.messages.find((message) => message.type === 'permanently-delete-history'), {
-    type: 'permanently-delete-history', eventIds: results.map((item) => item.event.id),
+  assert.deepEqual(app.messages.find((message) => message.type === 'prepare-destructive-action'), {
+    type: 'prepare-destructive-action', operation: 'delete-history', eventIds: results.map((item) => item.event.id),
+  });
+  assert.deepEqual(app.messages.find((message) => message.type === 'commit-destructive-action'), {
+    type: 'commit-destructive-action', token: 'shown-token',
   });
 });
 

@@ -1,6 +1,9 @@
 importScripts(
   'lib/history-store.js',
   'lib/storage-repository.js',
+  'lib/indexeddb-repository.js',
+  'lib/indexeddb-migration.js',
+  'lib/indexeddb-storage-repository.js',
   'lib/close-tracker.js'
 );
 
@@ -28,9 +31,29 @@ const { createCloseTracker, createTrackerPersistence, isHttpUrl } = self.TabEcho
 
 const CLOSE_BATCH_DELAY_MS = 450;
 const CLEANUP_ALARM_NAME = 'tab-echo-daily-cleanup';
+const ACTION_TOKEN_TTL_MS = 5 * 60 * 1000;
+const ACTION_TOKEN_LIMIT = 32;
 const activeMode = chrome.extension.inIncognitoContext ? 'incognito' : 'normal';
 const TRACKER_SESSION_KEY = `tabEcho:close-tracker:${activeMode}:v1`;
-const repository = createStorageRepository(chrome.storage.local);
+const ACTION_TOKENS_KEY = `tabEcho:action-tokens:${activeMode}:v1`;
+const STORAGE_FAILURE_KEY = `tabEcho:storage-failure:${activeMode}:v1`;
+const localRepository = createStorageRepository(chrome.storage.local);
+const indexedDbAvailable = typeof self.indexedDB === 'object'
+  && self.TabEchoIndexedDbRepository
+  && self.TabEchoIndexedDbStorageRepository;
+const indexedDbRecordStore = indexedDbAvailable
+  ? self.TabEchoIndexedDbRepository.createIndexedDbRecordStore({
+    indexedDB: self.indexedDB,
+    IDBKeyRange: self.IDBKeyRange,
+  })
+  : null;
+const repository = indexedDbRecordStore
+  ? self.TabEchoIndexedDbStorageRepository.createIndexedDbStorageRepository(
+    chrome.storage.local,
+    indexedDbRecordStore,
+    { legacyRepository: localRepository },
+  )
+  : localRepository;
 const trackerPersistence = createTrackerPersistence(
   chrome.storage.session,
   chrome.storage.local,
@@ -70,7 +93,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status || changeInfo.title || changeInfo.url || changeInfo.favIconUrl) {
+  if (changeInfo.status || changeInfo.title || changeInfo.url) {
     enqueueTrackerMutation(async () => {
       tracker.upsertTab(tab);
       await persistTrackerState();
@@ -135,12 +158,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       sendResponse({ ok: true, ...payload });
     })
-    .catch((error) => sendResponse({ ok: false, error: publicError(error) }));
+    .catch(async (error) => {
+      await recordStorageWriteFailure(error);
+      sendResponse({ ok: false, error: publicError(error) });
+    });
   return true;
 });
 
 async function initialize() {
-  await repository.migrateLegacyState();
+  await repository.migrateLegacyState(activeMode);
   const stored = await trackerPersistence.load();
   tracker = createCloseTracker({
     mode: activeMode,
@@ -150,11 +176,9 @@ async function initialize() {
   const windows = await chrome.windows.getAll();
   const liveWindowIds = windows.map((window) => window.id);
   if (trackerPersistence.recoveredAfterSessionLoss()) {
-    // A missing session mirror means Chrome itself exited. Archive the prior
-    // browser session before current windows can reuse its window or tab IDs.
-    tracker.recoverClosedWindows([]);
-    tracker.recoverMissingWindows([]);
-    tracker.hydrate(tabs);
+    // A missing session mirror can mean a browser exit or an extension reload.
+    // Reconcile individual durable snapshots before live ids can overwrite them.
+    tracker.reconcileRecoveredSession(tabs);
   } else {
     tracker.hydrate(tabs);
     tracker.recoverClosedWindows(liveWindowIds);
@@ -305,6 +329,9 @@ async function handleMessage(message) {
     const settings = await repository.getSettings();
     return { mode: activeMode, settings };
   }
+  if (action === 'get-storage-health') {
+    return getStorageHealth();
+  }
   if (action === 'get-state') {
     const context = await readPrunedContext();
     const compatibilityState = { settings: context.settings, events: { [activeMode]: context.history } };
@@ -319,15 +346,34 @@ async function handleMessage(message) {
     const source = action === 'get-history'
       ? context.history.slice().sort((a, b) => b.closedAt - a.closedAt)
       : context.trash.slice().sort((a, b) => b.deletedAt - a.deletedAt);
-    const results = buildSearchResults(source, message.query, {
-      deduplicateSingles: action === 'get-history' ? message.deduplicateSingles !== false : false,
-    });
-    return {
-      mode: activeMode, settings: context.settings, totalEventCount: source.length,
-      totalTabCount: countTabs(source), resultEventCount: results.length,
-      matchedTabCount: results.reduce((sum, item) => sum + item.matchedTabCount, 0),
-      resultTabCount: results.reduce((sum, item) => sum + item.totalTabCount, 0), results,
+    const results = buildSearchResults(source, message.query, { deduplicateSingles: false });
+    const totalTabCount = countTabs(source);
+    const matchedTabCount = results.reduce((sum, item) => sum + item.matchedTabCount, 0);
+    const resultTabCount = results.reduce((sum, item) => sum + item.totalTabCount, 0);
+    const statistics = {
+      revision: context.revision,
+      totalRecords: source.length,
+      totalTabs: totalTabCount,
+      matchingRecords: results.length,
+      matchingTabs: matchedTabCount,
+      resultTabs: resultTabCount,
+      displayedRecords: results.length,
     };
+    return {
+      mode: activeMode, settings: context.settings, revision: context.revision, statistics,
+      totalEventCount: statistics.totalRecords,
+      totalTabCount: statistics.totalTabs,
+      resultEventCount: statistics.matchingRecords,
+      matchedTabCount: statistics.matchingTabs,
+      resultTabCount: statistics.resultTabs,
+      results,
+    };
+  }
+  if (action === 'prepare-destructive-action') {
+    return prepareDestructiveAction(message);
+  }
+  if (action === 'commit-destructive-action') {
+    return commitDestructiveAction(message);
   }
   if (action === 'move-to-trash') {
     return mutateMoveToTrash(message);
@@ -335,7 +381,7 @@ async function handleMessage(message) {
   if (action === 'permanently-delete-history') {
     return repository.updateContext(activeMode, (context) => {
       const current = finalizeContext(context.history, context.trash, context.settings);
-      const ids = new Set(selectedEventIds(current.history, message, 'eventIds', true).map(String));
+      const ids = new Set(selectedEventIds(current.history, message, 'eventIds', false).map(String));
       const history = current.history.filter((event) => !ids.has(String(event.id)));
       return { ...finalizeContext(history, current.trash, context.settings), result: { deleted: current.history.length - history.length } };
     });
@@ -356,7 +402,19 @@ async function handleMessage(message) {
     const context = await readRepositoryContext();
     const validation = validateSettingsInput(mergeSettingsPatch(context.settings, message.settings));
     if (!validation.valid) throw protocolError('INVALID_SETTINGS', 'Settings validation failed.', validation.errors);
-    return { settings: validation.settings, impact: previewSettingsImpact(context.history, context.trash, context.settings, validation.settings) };
+    const impact = previewSettingsImpact(context.history, context.trash, context.settings, validation.settings);
+    const response = { settings: validation.settings, impact };
+    if (settingsImpactEventCount(impact) > 0) {
+      const prepared = await createActionToken({
+        operation: 'save-settings',
+        revision: context.revision,
+        settingsRevision: context.settingsRevision,
+        settings: validation.settings,
+      });
+      response.token = prepared.token;
+      response.expiresAt = prepared.expiresAt;
+    }
+    return response;
   }
   if (action === 'restore-event') {
     requireScalarId(message.eventId, 'eventId');
@@ -386,28 +444,250 @@ async function handleMessage(message) {
       throw protocolError('INVALID_REQUEST', 'removeExistingExcludedMatches must be a boolean.');
     }
     const before = await readRepositoryContext();
-    const settings = await saveSettingsPatchWithRetry(message.settings);
-    const addedDomains = getAddedExcludedDomains(before.settings.excludedDomains, settings.excludedDomains);
-    try {
-      const applied = await repository.updateContext(activeMode, (context) => {
-        const cleaned = applySettingsAndOptionalExclusionCleanup(
-          context.history, context.trash, settings, addedDomains, message.removeExistingExcludedMatches === true,
-        );
-        const excludedImpact = message.removeExistingExcludedMatches === true
-          ? previewExcludedDomainImpact(pruneHistoryEntries(context.history, settings), pruneTrashEntries(context.trash, settings), addedDomains)
-          : { totalTabCount: 0 };
-        return { ...cleaned, result: { removedExcludedTabs: excludedImpact.totalTabCount || 0 } };
-      });
-      return { settings, settingsSaved: true, cleanupPending: false, appliedContext: activeMode, otherContextPending: true, removedExcludedTabs: applied.removedExcludedTabs };
-    } catch (error) {
-      reportError(error);
-      return { settings, settingsSaved: true, cleanupPending: true, appliedContext: activeMode, otherContextPending: true };
+    const validation = validateSettingsInput(mergeSettingsPatch(before.settings, message.settings));
+    if (!validation.valid) throw protocolError('INVALID_SETTINGS', 'Settings validation failed.', validation.errors);
+    const impact = previewSettingsImpact(before.history, before.trash, before.settings, validation.settings);
+    if (settingsImpactEventCount(impact) > 0) {
+      throw protocolError('DESTRUCTIVE_PREVIEW_REQUIRED', 'Preview and confirm this settings change before saving.');
     }
+    const settings = await saveSettingsPatchWithRetry(message.settings);
+    return { settings, settingsSaved: true, cleanupPending: false, appliedContext: activeMode, otherContextPending: true, removedExcludedTabs: 0 };
   }
   if (action === 'reopen-event') return reopenEvent(message.eventId);
   if (action === 'reopen-tab') return reopenTab(message.eventId, message.tabId);
   if (action === 'open-dashboard') return openDashboard(message);
   throw protocolError('UNKNOWN_MESSAGE', `Unsupported message type: ${String(action || '')}`);
+}
+
+async function getStorageHealth() {
+  const storageArea = chrome.storage && chrome.storage.local;
+  const lastWriteFailure = await readLastStorageWriteFailure();
+  const localQuotaBytes = Number(storageArea && storageArea.QUOTA_BYTES);
+  let localBytesUsed = null;
+  if (storageArea && typeof storageArea.getBytesInUse === 'function') {
+    try {
+      const measured = Number(await storageArea.getBytesInUse(null));
+      if (Number.isFinite(measured) && measured >= 0) localBytesUsed = Math.round(measured);
+    } catch (_) { /* Fall through to the origin estimate when available. */ }
+  }
+  let originEstimate = null;
+  if (typeof navigator === 'object' && navigator.storage
+    && typeof navigator.storage.estimate === 'function') {
+    try {
+      const estimate = await navigator.storage.estimate();
+      const usage = Number(estimate && estimate.usage);
+      const quota = Number(estimate && estimate.quota);
+      if (Number.isFinite(usage) && usage >= 0 && Number.isFinite(quota) && quota > 0) {
+        originEstimate = { usage: Math.round(usage), quota, usageDetails: estimate.usageDetails };
+      }
+    } catch (_) { /* chrome.storage.local accounting remains a valid fallback. */ }
+  }
+  const localSupported = localBytesUsed !== null
+    && Number.isFinite(localQuotaBytes) && localQuotaBytes > 0;
+  if (!originEstimate && !localSupported) {
+    return {
+      supported: false,
+      bytesUsed: null,
+      quotaBytes: null,
+      usageRatio: null,
+      level: 'unknown',
+      lastWriteFailure,
+    };
+  }
+  const bytesUsed = originEstimate ? originEstimate.usage : localBytesUsed;
+  const quotaBytes = originEstimate ? originEstimate.quota : localQuotaBytes;
+  const usageRatio = bytesUsed / quotaBytes;
+  const localUsageRatio = localSupported ? localBytesUsed / localQuotaBytes : null;
+  const pressureRatio = Math.max(usageRatio, localUsageRatio === null ? 0 : localUsageRatio);
+  const level = storagePressureLevel(pressureRatio);
+  return {
+    supported: true,
+    bytesUsed,
+    quotaBytes,
+    usageRatio,
+    level,
+    ...(originEstimate ? {
+      indexedDbBytes: Number(originEstimate.usageDetails && originEstimate.usageDetails.indexedDB) || 0,
+      localBytesUsed,
+      localQuotaBytes: localSupported ? localQuotaBytes : null,
+      localUsageRatio,
+    } : {}),
+    lastWriteFailure,
+  };
+}
+
+function storagePressureLevel(usageRatio) {
+  return usageRatio >= 0.95 ? 'critical'
+    : usageRatio >= 0.85 ? 'warning'
+      : usageRatio >= 0.70 ? 'elevated' : 'normal';
+}
+
+async function readLastStorageWriteFailure() {
+  const sessionArea = chrome.storage && chrome.storage.session;
+  if (!sessionArea || typeof sessionArea.get !== 'function') return null;
+  try {
+    const stored = await sessionArea.get(STORAGE_FAILURE_KEY);
+    const failure = stored && stored[STORAGE_FAILURE_KEY];
+    return failure && typeof failure === 'object' && !Array.isArray(failure) ? failure : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function recordStorageWriteFailure(error) {
+  const isWriteFailure = error && (error.code === 'STORAGE_WRITE_FAILED'
+    || error.name === 'StorageWriteError');
+  const sessionArea = chrome.storage && chrome.storage.session;
+  if (!isWriteFailure || !sessionArea || typeof sessionArea.set !== 'function') return;
+  const failure = {
+    code: 'STORAGE_WRITE_FAILED',
+    operation: typeof error.operation === 'string' ? error.operation : null,
+    occurredAt: Date.now(),
+  };
+  try {
+    await sessionArea.set({ [STORAGE_FAILURE_KEY]: failure });
+  } catch (_) { /* Health reporting must never replace the original storage error. */ }
+}
+
+async function readActionTokens(now = Date.now()) {
+  const stored = await chrome.storage.session.get(ACTION_TOKENS_KEY);
+  const source = stored && stored[ACTION_TOKENS_KEY];
+  const entries = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+  const active = {};
+  for (const [token, entry] of Object.entries(entries)) {
+    if (entry && typeof entry === 'object' && Number(entry.expiresAt) > now) active[token] = entry;
+  }
+  return active;
+}
+
+async function writeActionTokens(entries) {
+  await chrome.storage.session.set({ [ACTION_TOKENS_KEY]: entries });
+}
+
+async function createActionToken(entry) {
+  const now = Date.now();
+  const entries = await readActionTokens(now);
+  const token = self.TabEchoHistoryStore.createId('action');
+  entries[token] = { ...entry, createdAt: now, expiresAt: now + ACTION_TOKEN_TTL_MS };
+  const kept = Object.entries(entries)
+    .sort((left, right) => Number(right[1].createdAt) - Number(left[1].createdAt))
+    .slice(0, ACTION_TOKEN_LIMIT);
+  await writeActionTokens(Object.fromEntries(kept));
+  return { token, expiresAt: entries[token].expiresAt };
+}
+
+async function consumeActionToken(rawToken) {
+  const token = requireScalarId(rawToken, 'token');
+  const now = Date.now();
+  const stored = await chrome.storage.session.get(ACTION_TOKENS_KEY);
+  const source = stored && stored[ACTION_TOKENS_KEY];
+  const entries = source && typeof source === 'object' && !Array.isArray(source) ? source : {};
+  const entry = entries[token];
+  if (!entry) throw protocolError('ACTION_TOKEN_INVALID', 'This confirmation is no longer valid.');
+  delete entries[token];
+  const active = {};
+  for (const [candidate, value] of Object.entries(entries)) {
+    if (value && typeof value === 'object' && Number(value.expiresAt) > now) active[candidate] = value;
+  }
+  await writeActionTokens(active);
+  if (Number(entry.expiresAt) <= now) {
+    throw protocolError('ACTION_TOKEN_EXPIRED', 'This confirmation has expired.');
+  }
+  return entry;
+}
+
+async function prepareDestructiveAction(message) {
+  await cleanupActiveContext();
+  const context = await readRepositoryContext();
+  const operation = String(message.operation || '');
+  let selected;
+  if (operation === 'delete-history') {
+    const ids = new Set(selectedEventIds(context.history, message, 'eventIds', false).map(String));
+    selected = context.history.filter((event) => ids.has(String(event.id)));
+  } else if (operation === 'empty-trash') {
+    if (message.eventIds !== undefined || message.all !== undefined || message.query !== undefined) {
+      throw protocolError('INVALID_REQUEST', 'Empty Trash does not accept a client-side selection.');
+    }
+    selected = context.trash.slice();
+  } else {
+    throw protocolError('INVALID_REQUEST', 'Unsupported destructive operation.');
+  }
+  if (selected.length === 0) {
+    throw protocolError('ACTION_EMPTY', 'There are no records in this action scope.');
+  }
+  const { token, expiresAt } = await createActionToken({
+    operation,
+    revision: context.revision,
+    eventIds: selected.map((event) => String(event.id)),
+  });
+  return { token, operation, eventCount: selected.length, tabCount: countTabs(selected), expiresAt };
+}
+
+async function commitDestructiveAction(message) {
+  if (message.removeExistingExcludedMatches !== undefined
+    && typeof message.removeExistingExcludedMatches !== 'boolean') {
+    throw protocolError('INVALID_REQUEST', 'removeExistingExcludedMatches must be a boolean.');
+  }
+  const prepared = await consumeActionToken(message.token);
+  if (prepared.operation === 'save-settings') {
+    return repository.updateSettingsAndContext(activeMode, (context) => {
+      if (context.revision !== prepared.revision || context.settingsRevision !== prepared.settingsRevision) {
+        throw protocolError('ACTION_STALE', 'Records or settings changed after confirmation. Nothing was saved or removed.');
+      }
+      const addedDomains = getAddedExcludedDomains(
+        context.settings.excludedDomains,
+        prepared.settings.excludedDomains,
+      );
+      const removeExisting = message.removeExistingExcludedMatches === true;
+      const retainedHistory = pruneHistoryEntries(context.history, prepared.settings);
+      const retainedTrash = pruneTrashEntries(context.trash, prepared.settings);
+      const excludedImpact = removeExisting
+        ? previewExcludedDomainImpact(retainedHistory, retainedTrash, addedDomains)
+        : { totalTabCount: 0 };
+      const cleaned = applySettingsAndOptionalExclusionCleanup(
+        context.history,
+        context.trash,
+        prepared.settings,
+        addedDomains,
+        removeExisting,
+      );
+      return {
+        settings: prepared.settings,
+        ...cleaned,
+        result: {
+          settings: prepared.settings,
+          settingsSaved: true,
+          cleanupPending: false,
+          appliedContext: activeMode,
+          otherContextPending: true,
+          removedExcludedTabs: excludedImpact.totalTabCount || 0,
+        },
+      };
+    });
+  }
+  return repository.updateContext(activeMode, (context) => {
+    if (context.revision !== prepared.revision) {
+      throw protocolError('ACTION_STALE', 'Records changed after confirmation. Nothing was removed.');
+    }
+    const ids = new Set(prepared.eventIds.map(String));
+    if (prepared.operation === 'delete-history') {
+      const history = context.history.filter((event) => !ids.has(String(event.id)));
+      return { history, trash: context.trash, result: { deleted: context.history.length - history.length } };
+    }
+    if (prepared.operation === 'empty-trash') {
+      const trash = context.trash.filter((event) => !ids.has(String(event.id)));
+      return { history: context.history, trash, result: { deleted: context.trash.length - trash.length } };
+    }
+    throw protocolError('ACTION_TOKEN_INVALID', 'This confirmation has an unsupported operation.');
+  });
+}
+
+function settingsImpactEventCount(impact) {
+  if (!impact || typeof impact !== 'object') return 0;
+  const combined = impact.combined && typeof impact.combined === 'object' ? impact.combined : impact;
+  const explicit = Number(combined.totalEventCount);
+  if (Number.isFinite(explicit)) return explicit;
+  return (Number(combined.historyEventCount) || 0) + (Number(combined.trashEventCount) || 0);
 }
 
 async function readPrunedContext() {
@@ -654,5 +934,6 @@ function publicError(error) {
 }
 
 function reportError(error) {
+  void recordStorageWriteFailure(error);
   console.error(error);
 }

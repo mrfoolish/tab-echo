@@ -42,7 +42,7 @@
 
   function getLabel(key) {
     if (SPECIAL_LABELS[key]) return SPECIAL_LABELS[key];
-    return key.replace(/^www\./, '');
+    return key;
   }
 
   function getTabCount(result) {

@@ -48,13 +48,13 @@ test('English and Chinese READMEs document the shipped product contract', () => 
   const zh = read('README.zh.md');
   for (const required of [
     'README.zh.md', '10', '10,000', '3 days', 'unlimited', 'Trash',
-    'storage-repository.js', 'close-tracker.js', 'dashboard.html',
+    'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
     'node --test extension/tests/*.test.js', 'alarms', 'storage', 'tabs',
     'Allow in Incognito', 'split', 'migration', 'confirmation',
   ]) assert.match(en, new RegExp(escapeRegExp(required), 'i'), `README.md must mention ${required}`);
   for (const required of [
     'README.md', '10', '10,000', '3 天', '不限制', '回收站',
-    'storage-repository.js', 'close-tracker.js', 'dashboard.html',
+    'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
     'node --test extension/tests/*.test.js', 'alarms', 'storage', 'tabs',
     '允许在无痕模式下运行', 'split', '迁移', '页面内二阶段确认',
   ]) assert.match(zh, new RegExp(escapeRegExp(required), 'i'), `README.zh.md must mention ${required}`);
@@ -69,9 +69,19 @@ test('manifest keeps context isolation and uses only documented permissions', ()
   assert.equal(manifest.permissions.includes('unlimitedStorage'), false);
 });
 
-test('manual acceptance remains explicitly unexecuted and covers core Chrome scenarios', () => {
+test('manifest icon files have the exact declared PNG dimensions', () => {
+  const manifest = JSON.parse(read('extension/manifest.json'));
+  for (const [declaredSize, relativePath] of Object.entries(manifest.icons)) {
+    const data = fs.readFileSync(path.join(root, 'extension', relativePath));
+    assert.equal(data.toString('ascii', 1, 4), 'PNG');
+    assert.equal(data.readUInt32BE(16), Number(declaredSize), `${relativePath} width`);
+    assert.equal(data.readUInt32BE(20), Number(declaredSize), `${relativePath} height`);
+  }
+});
+
+test('manual acceptance distinguishes automated preflight from remaining manual scenarios', () => {
   const manual = read('docs/testing/2026-09-18-manual-acceptance.md');
-  assert.match(manual, /状态：\*\*未执行\*\*/);
+  assert.match(manual, /状态：\*\*部分执行（自动化预检完成，人工交互待执行）\*\*/);
   assert.match(manual, /Chrome 版本：(待填写|\d+\.\d+\.\d+\.\d+)/);
   assert.match(manual, /扩展版本：(待填写|\d+\.\d+\.\d+)/);
   assert.match(manual, /执行日期：(待填写|\d{4}-\d{2}-\d{2})/);
@@ -79,6 +89,8 @@ test('manual acceptance remains explicitly unexecuted and covers core Chrome sce
   assert.match(manual, /(?:阻塞|执行)记录/);
   assert.match(manual, /(?:真实浏览器交互项|人工交互和主观判断的完整验收)[^\n]*保持未勾选/);
   assert.doesNotMatch(manual, /- \[x\]/i);
+  assert.match(manual, /Lighthouse Accessibility \/ Best Practices 均为 100/);
+  assert.match(manual, /连续两次重载扩展后保持不变/);
 
   for (const scenario of [
     '常规窗口单独关闭一个标签页', '整窗', 'Service Worker 休眠', '最后一个无痕窗口',

@@ -24,6 +24,11 @@ test('sidebar navigation icons share one geometry and stroke system', () => {
   assert.doesNotMatch(html, />[↶⌫⚙]</);
 });
 
+test('sidebar uses a high-density brand asset and a contrast-safe active color', () => {
+  assert.match(html, /<img src="icons\/icon-128\.png" alt="" width="28" height="28">/);
+  assert.match(css, /\.nav-list button\[aria-current="page"\][^{]*\{[^}]*color:\s*var\(--accent-hover\)/s);
+});
+
 const assetsExist = Object.values(paths).every((file) => fs.existsSync(file));
 const html = assetsExist ? fs.readFileSync(paths.html, 'utf8') : '';
 const css = assetsExist ? fs.readFileSync(paths.css, 'utf8') : '';
@@ -196,6 +201,16 @@ test('runtime uses background result counts, complete-event bulk operations, and
   assert.doesNotMatch(js, /storage\.session[^\n]+(?:query|page)/i);
 });
 
+test('dashboard treats the complete statistics snapshot as authoritative, including zero values', () => {
+  const counts = helpers.readStatistics({
+    statistics: { revision: 7, totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0, displayedRecords: 0 },
+    totalEventCount: 500, totalTabCount: 700, resultEventCount: 120, matchedTabCount: 140, resultTabCount: 140,
+  }, [{ event: { id: 'legacy', tabs: [{ id: 'tab' }] }, totalTabCount: 1 }]);
+  assert.deepEqual(counts, {
+    revision: 7, totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0, displayedRecords: 0,
+  });
+});
+
 test('history bulk move derives its single action scope from the search query', () => {
   assert.doesNotMatch(html, /id="moveScopeSelect"/);
   assert.match(html, /id="moveHistoryButton"/);
@@ -247,16 +262,22 @@ test('dashboard removes every result for the loaded query after inline confirmat
       messages.push(structuredClone(message));
       if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
       if (message.type === 'get-history') return historyResponse;
-      if (message.type === 'permanently-delete-history') return { ok: true, deleted: 120 };
+      if (message.type === 'prepare-destructive-action') return { ok: true, token: 'history-token', eventCount: 120, tabCount: 140 };
+      if (message.type === 'commit-destructive-action') return { ok: true, deleted: 120 };
       return { ok: true, settings };
     } }, storage: { session: { async get() { return {}; }, async set() {} } } } };
   context.globalThis = context; vm.runInNewContext(js, context); await new Promise((resolve) => setImmediate(resolve));
-  listeners['removeHistoryButton:click']();
+  await listeners['removeHistoryButton:click']();
   assert.equal(node('historyRemovePanel').hidden, false);
   assert.match(node('historyRemoveMessage').textContent, /120 matching records.*140 tabs/i);
   assert.equal(focused, 'confirmHistoryRemoveButton');
   await listeners['confirmHistoryRemoveButton:click'](); await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(messages.find((message) => message.type === 'permanently-delete-history'), { type: 'permanently-delete-history', all: true, query: 'needle' });
+  assert.deepEqual(messages.find((message) => message.type === 'prepare-destructive-action'), {
+    type: 'prepare-destructive-action', operation: 'delete-history', all: true, query: 'needle',
+  });
+  assert.deepEqual(messages.find((message) => message.type === 'commit-destructive-action'), {
+    type: 'commit-destructive-action', token: 'history-token',
+  });
 });
 
 test('typing invalidates an in-flight history request before debounce starts another', () => {
@@ -300,7 +321,8 @@ test('history offers list and domain layouts backed by extension modules', () =>
   assert.match(js, /timeFormat\.formatRelativeTime/);
   assert.match(js, /timeFormat\.formatFullTime/);
   assert.match(js, /moveDomainRecords/);
-  assert.match(js, /pending\.eventIds/);
+  assert.match(js, /eventIds:\s*scoped\.eventIds/);
+  assert.match(js, /commit-destructive-action/);
   assert.match(js, /selected \? getResultSelection\(selected\.results\)/);
 });
 
@@ -329,13 +351,40 @@ test('relative times refresh only for a visible history or Trash view', () => {
   assert.match(css, /\.event-time:focus::after/);
 });
 
-test('settings are grouped and explain that cleanup impact is scoped to the current context', () => {
-  for (const copy of ['Storage and cleanup', 'Popup display', 'Appearance and language', '保存与清理', '弹窗显示', '外观与语言']) {
+test('settings are grouped without repeating the save-impact scope notice by default', () => {
+  for (const copy of ['Storage and cleanup', 'Toolbar popup', 'Appearance and language', '保存与清理', '工具栏弹窗', '外观与语言']) {
     assert.ok((html + '\n' + js).includes(copy), 'missing settings group copy: ' + copy);
   }
-  assert.match(html, /id="settingsScope"/);
+  assert.doesNotMatch(html, /id="settingsScope"/);
+  assert.doesNotMatch(css, /\.settings-scope\s*\{/);
+  assert.doesNotMatch(js, /elements\.settingsScope\.textContent/);
   assert.match(js, /本次预览只统计当前\{mode\}的数据/);
+  assert.match(js, /messages\.push\(t\('settingsScope'/);
   assert.match(css, /\.settings-section\s*\{/);
+});
+
+test('popup size and excluded-domain settings explain their user-visible effects', () => {
+  assert.match(js, /popupSize:\s*'Maximum records shown'/);
+  assert.match(js, /浏览器工具栏中的 Tab Echo 弹窗/);
+  assert.match(js, /does not affect the full list or how many records are saved/);
+  assert.match(js, /不希望 Tab Echo 记录的网站域名/);
+  assert.match(js, /example\.com.*所有子域名/);
+  assert.match(js, /如命中已有记录，保存时可选择是否一并移除/);
+});
+
+test('settings controls expose linked help and errors through native form semantics', () => {
+  for (const name of ['maxRecords', 'maxAgeDays', 'trashMaxAgeDays', 'popupSize']) {
+    assert.match(html, new RegExp(`for="${name}Input"[^>]*>[\\s\\S]*id="${name}Input"[^>]*aria-describedby="[^"]*${name}Error`));
+  }
+  assert.match(html, /id="excludedDomainsInput"[^>]*spellcheck="false"[^>]*aria-describedby="excludedDomainsHelp excludedDomainsError"/);
+  assert.match(html, /id="excludedDomainsError"[^>]*role="alert"/);
+  assert.match(js, /setCustomValidity\(localizedMessage\)/);
+  assert.match(js, /setCustomValidity\(''\)/);
+  assert.match(js, /setAttribute\('aria-live', isError \? 'assertive' : 'polite'\)/);
+});
+
+test('dashboard search disables text correction for literal titles and URLs', () => {
+  assert.match(html, /id="searchInput"[^>]*autocorrect="off"[^>]*autocapitalize="off"[^>]*spellcheck="false"/);
 });
 
 test('history layout and cross-domain group copy describe their actual meaning', () => {
@@ -458,7 +507,8 @@ test('browser VM guards stale Trash actions, restores explicit ids, and Empty Tr
         totalEventCount: 2, totalTabCount: 2, resultEventCount: 2, matchedTabCount: 2 };
       if (message.type === 'restore-trash' && blockRestore) return { ok: false, requiredSlots: 2, error: { code: 'INSUFFICIENT_CAPACITY', message: 'capacity' } };
       if (message.type === 'restore-trash') return { ok: true, restored: 2 };
-      if (message.type === 'empty-trash') return { ok: true, deleted: 2 };
+      if (message.type === 'prepare-destructive-action') return { ok: true, token: 'trash-token', eventCount: 2, tabCount: 2 };
+      if (message.type === 'commit-destructive-action') return { ok: true, deleted: 2 };
       if (message.type === 'get-history' && failHistory) return { ok: false, error: { code: 'FAILED', message: 'refresh failed' } };
       return { ok: true, mode: 'incognito', settings: { language: 'en', theme: 'system', pageSize: 50 }, results: [], totalEventCount: 0, totalTabCount: 0, resultEventCount: 0, matchedTabCount: 0 };
     } }, storage: { session: { async get() { return {}; }, async set() {} } } },
@@ -468,11 +518,13 @@ test('browser VM guards stale Trash actions, restores explicit ids, and Empty Tr
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(messages.find((message) => message.type === 'permanently-delete-trash'), { type: 'permanently-delete-trash', trashIds: ['old'] });
   assert.equal(confirmations.length, 0);
-  listeners['emptyTrashButton:click'](); await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(messages.filter((message) => message.type === 'empty-trash').length, 0);
+  await listeners['emptyTrashButton:click'](); await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(messages.filter((message) => message.type === 'commit-destructive-action').length, 0);
   assert.equal(node('trashEmptyPanel').hidden, false);
   await listeners['confirmEmptyTrashButton:click'](); await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(messages.filter((message) => message.type === 'empty-trash').length, 1);
+  assert.deepEqual(messages.find((message) => message.type === 'commit-destructive-action'), {
+    type: 'commit-destructive-action', token: 'trash-token',
+  });
   assert.equal(confirmations.length, 0);
   confirmations.length = 0;
   await listeners['restoreTrashResultsButton:click'](); await new Promise((resolve) => setImmediate(resolve));
@@ -496,7 +548,7 @@ test('browser VM guards stale Trash actions, restores explicit ids, and Empty Tr
 });
 
 test('settings VM previews retention and new-domain impact with distinct save choices', async () => {
-  const listeners = {}; const nodes = new Map(); const messages = []; let invalidPreview = false; let impactEvents = 0; let exclusionEvents = 0; let focused = ''; let confirmCount = 0;
+  const listeners = {}; const nodes = new Map(); const messages = []; let invalidPreview = false; let impactEvents = 0; let exclusionEvents = 0; let focused = ''; let confirmCount = 0; let lastPreviewSettings = null;
   function node(id = '') {
     if (nodes.has(id)) return nodes.get(id);
     const value = { id, dataset: {}, hidden: false, disabled: false, value: '', textContent: '', parentNode: null,
@@ -516,13 +568,17 @@ test('settings VM previews retention and new-domain impact with distinct save ch
       messages.push(structuredClone(message)); if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
       if (message.type === 'get-settings') return { ok: true, mode: 'normal', settings };
       if (message.type === 'preview-settings-impact' && invalidPreview) return { ok: false, error: { code: 'INVALID_SETTINGS', message: 'invalid', fields: { maxAgeDays: 'must be positive' } } };
-      if (message.type === 'preview-settings-impact') return { ok: true, settings: { ...settings, ...message.settings }, impact: {
-        combined: { historyEventCount: impactEvents + exclusionEvents, historyTabCount: impactEvents * 2 + exclusionEvents, trashEventCount: 0, trashTabCount: 0 },
-        retention: { historyEventCount: impactEvents, historyTabCount: impactEvents * 2, trashEventCount: 0, trashTabCount: 0 },
-        exclusions: { historyEventCount: exclusionEvents, historyTabCount: exclusionEvents, trashEventCount: 0, trashTabCount: 0 },
-      } };
+      if (message.type === 'preview-settings-impact') {
+        lastPreviewSettings = { ...settings, ...message.settings };
+        return { ok: true, settings: lastPreviewSettings, token: impactEvents + exclusionEvents > 0 ? 'settings-token' : undefined, impact: {
+          combined: { historyEventCount: impactEvents + exclusionEvents, historyTabCount: impactEvents * 2 + exclusionEvents, trashEventCount: 0, trashTabCount: 0 },
+          retention: { historyEventCount: impactEvents, historyTabCount: impactEvents * 2, trashEventCount: 0, trashTabCount: 0 },
+          exclusions: { historyEventCount: exclusionEvents, historyTabCount: exclusionEvents, trashEventCount: 0, trashTabCount: 0 },
+        } };
+      }
       if (message.type === 'save-settings' && invalidPreview) return { ok: false, error: { code: 'INVALID_SETTINGS', message: 'invalid', fields: { maxAgeDays: 'must be positive' } } };
       if (message.type === 'save-settings') return { ok: true, settings: { ...settings, ...message.settings }, settingsSaved: true, cleanupPending: true, otherContextPending: true };
+      if (message.type === 'commit-destructive-action') return { ok: true, settings: lastPreviewSettings, settingsSaved: true, cleanupPending: false, otherContextPending: true };
       return { ok: true };
     } }, storage: { session: { async get() { return {}; }, async set() {} } } } };
   context.globalThis = context; vm.runInNewContext(js, context); await new Promise((resolve) => setImmediate(resolve));
@@ -545,8 +601,10 @@ test('settings VM previews retention and new-domain impact with distinct save ch
   assert.match(node('settingsImpactMessage').textContent, /2 closed records/i);
   assert.match(node('settingsImpactMessage').textContent, /4 tabs/i);
   await listeners['confirmSettingsButton:click']();
-  assert.equal(messages.filter((message) => message.type === 'save-settings').length, savesBefore + 1);
-  assert.equal(messages.filter((message) => message.type === 'save-settings').at(-1).removeExistingExcludedMatches, false);
+  assert.equal(messages.filter((message) => message.type === 'save-settings').length, savesBefore);
+  assert.deepEqual(messages.filter((message) => message.type === 'commit-destructive-action').at(-1), {
+    type: 'commit-destructive-action', token: 'settings-token', removeExistingExcludedMatches: false,
+  });
   assert.equal(node('settingsImpactPanel').hidden, true);
   assert.equal(node('saveSettingsButton').hidden, false);
 
@@ -558,9 +616,9 @@ test('settings VM previews retention and new-domain impact with distinct save ch
   assert.equal(node('confirmSettingsAndRemoveButton').hidden, false);
   assert.match(node('confirmSettingsButton').textContent, /rules only/i);
   await listeners['confirmSettingsAndRemoveButton:click']();
-  const exclusionSave = messages.filter((message) => message.type === 'save-settings').at(-1);
+  const exclusionSave = messages.filter((message) => message.type === 'commit-destructive-action').at(-1);
   assert.equal(exclusionSave.removeExistingExcludedMatches, true);
-  assert.deepEqual(exclusionSave.settings.excludedDomains, ['example.com']);
+  assert.equal(exclusionSave.token, 'settings-token');
 
   exclusionEvents = 0; impactEvents = 1; await listeners['settingsForm:submit'](submitEvent);
   assert.equal(node('settingsImpactPanel').hidden, false);
@@ -636,7 +694,8 @@ test('runtime uses explicit loaded trash ids, single permanent deletion, and an 
   assert.match(js, /type:\s*'restore-trash',\s*trashIds:\s*selection\.eventIds/);
   assert.match(js, /type:\s*'restore-trash',\s*trashIds:\s*\[eventId\]/);
   assert.match(js, /type:\s*'permanently-delete-trash',\s*trashIds:\s*\[eventId\]/);
-  assert.match(js, /type:\s*'empty-trash'/);
+  assert.match(js, /operation:\s*'empty-trash'/);
+  assert.match(js, /type:\s*'commit-destructive-action'/);
   assert.match(js, /type:\s*'get-settings'/);
   assert.match(js, /type:\s*'save-settings'/);
 });
@@ -748,6 +807,7 @@ test('dashboard shows group matched/total counts and localizes storage failures'
   assert.ok(js.includes('matched: result.matchedTabCount'));
   assert.match(js, /storageWriteFailed: 'Could not save data to browser storage/);
   assert.match(js, /storageWriteFailed: '无法将数据保存到浏览器存储空间/);
+  assert.match(js, /invalidExcludedDomains: '请仅填写有效域名/);
   assert.match(js, /STORAGE_WRITE_FAILED/);
   assert.match(js, /function errorMessage/);
 });
@@ -762,7 +822,8 @@ test('runtime localizes navigation, history, search, and pagination aria labels'
 
 test('bulk destructive actions use inline confirmation instead of native dialogs', () => {
   assert.doesNotMatch(js, /root\.confirm\(|window\.confirm\(/);
-  assert.match(js, /permanently-delete-history', all: true, query: pending\.query/);
+  assert.match(js, /operation:\s*'delete-history', all:\s*true, query/);
+  assert.match(js, /commit-destructive-action', token:\s*pending\.token/);
   assert.match(js, /elements\.emptyTrash\.addEventListener\('click', showTrashEmptyConfirmation\)/);
   assert.match(js, /clearDestructiveConfirmation\(\);\s*state\.historyLayout = button\.dataset\.historyLayout/);
   assert.match(js, /clearDestructiveConfirmation\(\); state\.selectedDomain = button\.dataset\.domainKey/);

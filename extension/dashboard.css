@@ -42,7 +42,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .nav-list button { display: flex; min-height: 43px; align-items: center; gap: 11px; width: 100%; padding: 10px 12px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; }
 .nav-icon { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; }
 .nav-list button:hover { color: var(--ink); background: var(--soft); }
-.nav-list button[aria-current="page"] { border-color: color-mix(in srgb, var(--accent) 18%, var(--line)); color: var(--accent); background: var(--accent-soft); font-weight: 680; }
+.nav-list button[aria-current="page"] { border-color: color-mix(in srgb, var(--accent) 18%, var(--line)); color: var(--accent-hover); background: var(--accent-soft); font-weight: 680; }
 .workspace { min-width: 0; padding: 30px clamp(26px, 4.5vw, 72px) 56px; }
 .topbar { display: flex; min-height: 46px; align-items: center; gap: 14px; margin: 0 auto 22px; max-width: 1160px; }
 .search-field { position: relative; display: block; width: min(620px, 100%); }
@@ -140,7 +140,6 @@ mark { padding: 0 1px; color: inherit; background: var(--mark); border-radius: 2
 .pager select, .settings-form select { min-height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); }
 .settings-form { display: grid; gap: 0; padding: 8px 24px 24px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); box-shadow: 0 1px 0 rgb(30 38 52 / 2%); }
 .settings-form h2 { margin: 24px 0 4px; color: var(--ink); font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
-.settings-scope { margin: 14px 0 2px; padding: 11px 13px; border-radius: 7px; color: var(--muted); background: var(--soft); font-size: 12px; line-height: 1.5; }
 .settings-section { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 0 32px; border-bottom: 1px solid var(--line); }
 .settings-retention { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
 .settings-section label { display: grid; align-content: start; gap: 7px; min-height: 132px; padding: 16px 0; font-weight: 650; }

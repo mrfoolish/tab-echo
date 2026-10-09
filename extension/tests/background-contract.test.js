@@ -17,7 +17,9 @@ function memoryArea(initial = {}, controls = {}) {
   const getKeys = [];
   let reads = 0;
   return {
+    ...(Number.isFinite(controls.quotaBytes) ? { QUOTA_BYTES: controls.quotaBytes } : {}),
     values, writes, get reads() { return reads; },
+    ...(Number.isFinite(controls.bytesInUse) ? { async getBytesInUse() { return controls.bytesInUse; } } : {}),
     async get(keys) {
       reads += 1;
       getKeys.push(structuredClone(keys));
@@ -55,9 +57,9 @@ const keys = {
   migrationNotice: 'tabEcho:migration-notice:v2',
 };
 
-async function loadBackground({ incognito = false, localInitial = {}, localArea, tabs = [], awaitReady = true, queryGate, failCreateUrl, localControls = {} } = {}) {
+async function loadBackground({ incognito = false, localInitial = {}, localArea, sessionArea, tabs = [], awaitReady = true, queryGate, failCreateUrl, localControls = {}, storageEstimate } = {}) {
   const local = localArea || memoryArea(localInitial, localControls);
-  const session = memoryArea();
+  const session = sessionArea || memoryArea();
   const createdAlarms = [];
   const openedTabs = [];
   const openedWindows = [];
@@ -104,6 +106,7 @@ async function loadBackground({ incognito = false, localInitial = {}, localArea,
   };
   const context = {
     clearTimeout, setTimeout, structuredClone, URL, console: { error() {} }, chrome, importScripts() {},
+    ...(storageEstimate ? { navigator: { storage: { estimate: storageEstimate } } } : {}),
     self: {
       TabEchoHistoryStore: require('../lib/history-store.js'),
       TabEchoStorageRepository: require('../lib/storage-repository.js'),
@@ -124,7 +127,7 @@ async function loadBackground({ incognito = false, localInitial = {}, localArea,
     assert.equal(ready.ok, true, JSON.stringify(ready));
     await new Promise((resolve) => setImmediate(resolve));
   }
-  return { chrome, local, events, createdAlarms, openedTabs, openedWindows, message };
+  return { chrome, local, session, events, createdAlarms, openedTabs, openedWindows, message };
 }
 
 test('initialization and lifecycle hooks ensure the fixed daily cleanup alarm', async () => {
@@ -178,6 +181,25 @@ test('browser restart archives old snapshots before hydrating a reused Chrome wi
   assert.deepEqual(subject.local.values[trackerKey].windowSnapshotsById['10'].tabIds, ['2']);
 });
 
+test('extension reload does not archive durable snapshots that still match live tabs', async () => {
+  const trackerKey = 'tabEcho:close-tracker:normal:v1';
+  const tracker = require('../lib/close-tracker.js').createCloseTracker({
+    mode: 'normal', now: () => 1700000000000,
+  });
+  const tabs = [
+    { id: 1, windowId: 10, index: 0, incognito: false, title: 'Still open', url: 'https://still-open.example/' },
+  ];
+  tracker.hydrate(tabs);
+
+  const subject = await loadBackground({
+    localInitial: { [trackerKey]: { ...tracker.getState(), revision: 7 } },
+    tabs,
+  });
+
+  assert.deepEqual(subject.local.values[keys.normalHistory] || [], []);
+  assert.deepEqual(subject.local.values[trackerKey].windowSnapshotsById['10'].tabIds, ['1']);
+});
+
 test('message mutations use only the trusted active partition and query all moves underlying events', async () => {
   const normal = [entry('match', 'normal', [{ id: 'a', title: 'Needle', url: 'https://a.example/' }]), entry('keep')];
   const incognito = [entry('secret', 'incognito')];
@@ -227,6 +249,70 @@ test('query-wide history removal deletes complete matching events without touchi
   assert.equal((await subject.message({ type: 'permanently-delete-history' })).error.code, 'INVALID_REQUEST');
 });
 
+test('prepared History deletion commits the exact server-side scope once', async () => {
+  const subject = await loadBackground({ localInitial: {
+    [keys.normalHistory]: [entry('match', 'normal', [{ id: 'tab-a', title: 'Needle', url: 'https://a.test/' }]), entry('keep')],
+  } });
+
+  const prepared = await subject.message({
+    type: 'prepare-destructive-action', operation: 'delete-history', all: true, query: 'needle',
+  });
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.operation, 'delete-history');
+  assert.equal(prepared.eventCount, 1);
+  assert.equal(prepared.tabCount, 1);
+  assert.equal(typeof prepared.token, 'string');
+  assert.deepEqual(subject.local.values[keys.normalHistory].map((event) => event.id), ['match', 'keep']);
+
+  const committed = await subject.message({ type: 'commit-destructive-action', token: prepared.token });
+  assert.equal(committed.ok, true);
+  assert.equal(committed.deleted, 1);
+  assert.deepEqual(subject.local.values[keys.normalHistory].map((event) => event.id), ['keep']);
+
+  const replay = await subject.message({ type: 'commit-destructive-action', token: prepared.token });
+  assert.equal(replay.ok, false);
+  assert.equal(replay.error.code, 'ACTION_TOKEN_INVALID');
+});
+
+test('prepared destructive actions reject changed data without deleting the prepared scope', async () => {
+  const subject = await loadBackground({ localInitial: {
+    [keys.normalHistory]: [entry('first'), entry('second')],
+  } });
+  const prepared = await subject.message({
+    type: 'prepare-destructive-action', operation: 'delete-history', all: true, query: '',
+  });
+
+  assert.equal((await subject.message({ type: 'move-to-trash', eventIds: ['second'] })).moved, 1);
+  const stale = await subject.message({ type: 'commit-destructive-action', token: prepared.token });
+
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error.code, 'ACTION_STALE');
+  assert.deepEqual(subject.local.values[keys.normalHistory].map((event) => event.id), ['first']);
+  assert.deepEqual(subject.local.values[keys.normalTrash].map((event) => event.id), ['second']);
+});
+
+test('prepared Empty Trash uses exact counts and rejects an intervening Trash change', async () => {
+  const now = Date.now();
+  const subject = await loadBackground({ localInitial: {
+    [keys.normalHistory]: [entry('new-history')],
+    [keys.normalTrash]: [entry('old-trash', 'normal', [
+      { id: 'a', title: 'A', url: 'https://a.test/' },
+      { id: 'b', title: 'B', url: 'https://b.test/' },
+    ], { deletedAt: now })],
+  } });
+  const prepared = await subject.message({
+    type: 'prepare-destructive-action', operation: 'empty-trash',
+  });
+  assert.equal(prepared.eventCount, 1);
+  assert.equal(prepared.tabCount, 2);
+
+  await subject.message({ type: 'move-to-trash', eventIds: ['new-history'] });
+  const stale = await subject.message({ type: 'commit-destructive-action', token: prepared.token });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error.code, 'ACTION_STALE');
+  assert.deepEqual(subject.local.values[keys.normalTrash].map((event) => event.id), ['old-trash', 'new-history']);
+});
+
 test('history reads lazily prune history and trash together and return search counts', async () => {
   const old = Date.now() - 10 * 86400000;
   const subject = await loadBackground({ localInitial: {
@@ -238,6 +324,16 @@ test('history reads lazily prune history and trash together and return search co
   assert.equal(result.ok, true);
   assert.equal(result.totalEventCount, 1);
   assert.equal(result.matchedTabCount, 1);
+  assert.equal(result.revision, 1);
+  assert.deepEqual(structuredClone(result.statistics), {
+    revision: 1,
+    totalRecords: 1,
+    totalTabs: 1,
+    matchingRecords: 1,
+    matchingTabs: 1,
+    resultTabs: 1,
+    displayedRecords: 1,
+  });
   assert.deepEqual(subject.local.values[keys.normalHistory].map((item) => item.id), ['new']);
   assert.deepEqual(subject.local.values[keys.normalTrash], []);
 });
@@ -288,7 +384,7 @@ test('save-settings applies patch semantics and preserves omitted retention sett
   });
 });
 
-test('settings preview and save optionally remove only newly excluded matches', async () => {
+test('settings preview token atomically saves and optionally removes only newly excluded matches', async () => {
   const current = { maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10, pageSize: 50, language: 'en', theme: 'system', excludedDomains: ['old.test'] };
   const mixed = entry('mixed', 'normal', [
     { id: 'old', title: 'Old', url: 'https://old.test/a' },
@@ -299,15 +395,58 @@ test('settings preview and save optionally remove only newly excluded matches', 
   const preview = await subject.message({ type: 'preview-settings-impact', settings: { excludedDomains: ['old.test', 'new.test'] } });
   assert.deepEqual(structuredClone(preview.impact.addedExcludedDomains), ['new.test']);
   assert.equal(preview.impact.exclusions.historyTabCount, 1);
-  const kept = await subject.message({ type: 'save-settings', settings: preview.settings, removeExistingExcludedMatches: false });
+  assert.equal(typeof preview.token, 'string');
+  const direct = await subject.message({ type: 'save-settings', settings: preview.settings, removeExistingExcludedMatches: false });
+  assert.equal(direct.ok, false);
+  assert.equal(direct.error.code, 'DESTRUCTIVE_PREVIEW_REQUIRED');
+  const kept = await subject.message({
+    type: 'commit-destructive-action', token: preview.token, removeExistingExcludedMatches: false,
+  });
   assert.equal(kept.removedExcludedTabs, 0);
   assert.deepEqual(subject.local.values[keys.normalHistory][0].tabs.map((tab) => tab.id), ['old', 'new', 'keep']);
 
   const subject2 = await loadBackground({ localInitial: { [keys.settings]: current, [keys.normalHistory]: [mixed] } });
-  const removed = await subject2.message({ type: 'save-settings', settings: preview.settings, removeExistingExcludedMatches: true });
+  const preview2 = await subject2.message({ type: 'preview-settings-impact', settings: { excludedDomains: ['old.test', 'new.test'] } });
+  const removed = await subject2.message({
+    type: 'commit-destructive-action', token: preview2.token, removeExistingExcludedMatches: true,
+  });
   assert.equal(removed.removedExcludedTabs, 1);
   assert.deepEqual(subject2.local.values[keys.normalHistory][0].tabs.map((tab) => tab.id), ['old', 'keep']);
-  assert.equal((await subject2.message({ type: 'save-settings', settings: preview.settings, removeExistingExcludedMatches: 'yes' })).error.code, 'INVALID_REQUEST');
+  assert.equal((await subject2.message({
+    type: 'commit-destructive-action', token: 'missing', removeExistingExcludedMatches: 'yes',
+  })).error.code, 'INVALID_REQUEST');
+});
+
+test('settings impact token becomes stale after records or settings change', async () => {
+  const current = { maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10, pageSize: 50, language: 'en', theme: 'system', excludedDomains: [] };
+  const subject = await loadBackground({ localInitial: {
+    [keys.settings]: current,
+    [keys.normalHistory]: [entry('remove-by-limit'), entry('keep')],
+  } });
+  const preview = await subject.message({ type: 'preview-settings-impact', settings: { maxRecords: 1 } });
+  assert.equal(typeof preview.token, 'string');
+  await subject.message({ type: 'move-to-trash', eventIds: ['keep'] });
+
+  const stale = await subject.message({
+    type: 'commit-destructive-action', token: preview.token, removeExistingExcludedMatches: false,
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error.code, 'ACTION_STALE');
+  assert.equal(subject.local.values[keys.settings].maxRecords, 10000);
+
+  const subject2 = await loadBackground({ localInitial: {
+    [keys.settings]: current,
+    [keys.normalHistory]: [entry('remove-by-limit'), entry('keep')],
+  } });
+  const preview2 = await subject2.message({ type: 'preview-settings-impact', settings: { maxRecords: 1 } });
+  await subject2.message({ type: 'save-settings', settings: { theme: 'dark' } });
+  const settingsStale = await subject2.message({
+    type: 'commit-destructive-action', token: preview2.token, removeExistingExcludedMatches: false,
+  });
+  assert.equal(settingsStale.ok, false);
+  assert.equal(settingsStale.error.code, 'ACTION_STALE');
+  assert.equal(subject2.local.values[keys.settings].maxRecords, 10000);
+  assert.equal(subject2.local.values[keys.settings].theme, 'dark');
 });
 
 test('get-settings returns settings and the trusted active browsing mode without loading history', async () => {
@@ -323,6 +462,68 @@ test('get-settings returns settings and the trusted active browsing mode without
   assert.equal(Object.hasOwn(result, 'events'), false);
   assert.equal(Object.hasOwn(result, 'results'), false);
   assert.deepEqual(subject.local.getKeys.slice(getBaseline), [keys.settings]);
+});
+
+test('storage health reports quota pressure levels without loading record arrays', async () => {
+  const quotaBytes = 10 * 1024 * 1024;
+  const local = memoryArea({}, { bytesInUse: Math.round(quotaBytes * 0.86), quotaBytes });
+  const subject = await loadBackground({ localArea: local });
+  const baselineReads = local.reads;
+
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.equal(health.ok, true);
+  assert.equal(health.supported, true);
+  assert.equal(health.quotaBytes, quotaBytes);
+  assert.equal(health.level, 'warning');
+  assert.ok(health.usageRatio >= 0.85 && health.usageRatio < 0.95);
+  assert.equal(local.reads, baselineReads);
+
+  for (const [ratio, level] of [[0.69, 'normal'], [0.70, 'elevated'], [0.85, 'warning'], [0.95, 'critical']]) {
+    const worker = await loadBackground({ localArea: memoryArea({}, {
+      bytesInUse: Math.round(quotaBytes * ratio), quotaBytes,
+    }) });
+    const result = await worker.message({ type: 'get-storage-health' });
+    assert.equal(result.ok, true);
+    assert.equal(result.level, level, `expected ${ratio} to be ${level}`);
+  }
+});
+
+test('storage health explicitly reports unsupported byte accounting', async () => {
+  const subject = await loadBackground();
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.deepEqual(structuredClone(health), {
+    ok: true,
+    supported: false,
+    bytesUsed: null,
+    quotaBytes: null,
+    usageRatio: null,
+    level: 'unknown',
+    lastWriteFailure: null,
+  });
+});
+
+test('storage health includes IndexedDB usage and reports the highest storage pressure', async () => {
+  const localQuotaBytes = 10 * 1024 * 1024;
+  const originQuotaBytes = 100 * 1024 * 1024;
+  const subject = await loadBackground({
+    localArea: memoryArea({}, { bytesInUse: Math.round(localQuotaBytes * 0.20), quotaBytes: localQuotaBytes }),
+    storageEstimate: async () => ({
+      usage: Math.round(originQuotaBytes * 0.86),
+      quota: originQuotaBytes,
+      usageDetails: { indexedDB: 70 * 1024 * 1024 },
+    }),
+  });
+
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.equal(health.ok, true);
+  assert.equal(health.bytesUsed, Math.round(originQuotaBytes * 0.86));
+  assert.equal(health.quotaBytes, originQuotaBytes);
+  assert.equal(health.indexedDbBytes, 70 * 1024 * 1024);
+  assert.equal(health.localQuotaBytes, localQuotaBytes);
+  assert.equal(health.level, 'warning');
 });
 
 test('Popup acknowledgement consumes the shared notice before Dashboard reads from the other mode', async () => {
@@ -373,7 +574,7 @@ test('legacy delete protocols reject missing or empty ids', async () => {
   }
 });
 
-test('history deduplicates singles while trash keeps duplicates and no-change reads do not persist', async () => {
+test('history and trash preserve duplicate URLs so visible and actionable counts stay aligned', async () => {
   const now = Date.now();
   const duplicate = (id, deletedAt) => entry(id, 'normal', [{ id, title: id, url: 'https://same.example/' }], { deletedAt });
   const subject = await loadBackground({ localInitial: {
@@ -384,11 +585,12 @@ test('history deduplicates singles while trash keeps duplicates and no-change re
   const baselineReads = subject.local.reads;
   const history = await subject.message({ type: 'get-history' });
   const trash = await subject.message({ type: 'get-trash' });
-  assert.equal(history.resultEventCount, 1);
+  assert.equal(history.resultEventCount, 2);
+  assert.equal(history.statistics.matchingRecords, 2);
   assert.equal(trash.resultEventCount, 2);
   assert.equal(subject.local.writes.length, baseline);
-  // The repository exposes three public reads; each message performs that set once, not twice.
-  assert.equal(subject.local.reads, baselineReads + 6);
+  // Each message reads settings, revisions, History, and Trash in one storage call.
+  assert.equal(subject.local.reads, baselineReads + 2);
 });
 
 test('trash restore is atomic at capacity and restore-results restores full matching entries', async () => {
@@ -462,6 +664,49 @@ test('storage write failures use the stable public STORAGE_WRITE_FAILED code', a
   const result = await subject.message({ type: 'move-to-trash', eventIds: ['one'] });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'STORAGE_WRITE_FAILED');
+
+  const health = await subject.message({ type: 'get-storage-health' });
+  assert.equal(health.lastWriteFailure.code, 'STORAGE_WRITE_FAILED');
+  assert.equal(health.lastWriteFailure.operation, 'updateContext(normal)');
+  assert.ok(Number.isFinite(health.lastWriteFailure.occurredAt));
+});
+
+test('failed close-event writes remain in the durable outbox and retry without duplicates', async () => {
+  let rejectHistoryWrites = true;
+  const trackedTab = {
+    id: 1, windowId: 10, index: 0, incognito: false,
+    title: 'Recover me', url: 'https://recover.example/',
+  };
+  const subject = await loadBackground({ tabs: [trackedTab], localControls: {
+    failSet(items) { return rejectHistoryWrites && Object.hasOwn(items, keys.normalHistory); },
+  } });
+
+  subject.events.windowRemoved.listeners[0](10);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const trackerKey = 'tabEcho:close-tracker:normal:v1';
+  assert.equal(Object.keys(subject.local.values[trackerKey].pendingEventsById).length, 1);
+  assert.equal(subject.local.values[keys.normalHistory], undefined);
+
+  rejectHistoryWrites = false;
+  subject.events.created.listeners[0]({
+    id: 2, windowId: 20, index: 0, incognito: false,
+    title: 'Retry trigger', url: 'https://trigger.example/',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(subject.local.values[keys.normalHistory].length, 1);
+  assert.equal(subject.local.values[keys.normalHistory][0].tabs[0].url, trackedTab.url);
+  assert.equal(Object.keys(subject.local.values[trackerKey].pendingEventsById).length, 0);
+
+  subject.events.created.listeners[0]({
+    id: 3, windowId: 20, index: 1, incognito: false,
+    title: 'No duplicate', url: 'https://second-trigger.example/',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(subject.local.values[keys.normalHistory].length, 1);
 });
 
 test('legacy restore-event opens a complete group without consuming history', async () => {
@@ -516,17 +761,19 @@ test('legacy group window-create failure reports every URL as not opened', async
   assert.equal(result.failures.length, 2);
 });
 
-test('save-settings reports saved settings when subsequent cleanup fails', async () => {
-  let settingsWritten = false;
+test('destructive settings save is atomic when its storage write fails', async () => {
   const subject = await loadBackground({ localControls: { failSet(items) {
-    if (Object.hasOwn(items, keys.settings)) { settingsWritten = true; return false; }
-    return settingsWritten;
+    return Object.hasOwn(items, keys.settings) && Object.hasOwn(items, keys.normalHistory);
   } } });
-  const result = await subject.message({ type: 'save-settings', settings: { maxRecords: 25 } });
-  assert.equal(result.ok, true);
-  assert.equal(result.settingsSaved, true);
-  assert.equal(result.cleanupPending, true);
-  assert.equal(subject.local.values[keys.settings].maxRecords, 25);
+  subject.local.values[keys.normalHistory] = [entry('one'), entry('two')];
+  const preview = await subject.message({ type: 'preview-settings-impact', settings: { maxRecords: 1 } });
+  const result = await subject.message({
+    type: 'commit-destructive-action', token: preview.token, removeExistingExcludedMatches: false,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'STORAGE_WRITE_FAILED');
+  assert.equal(subject.local.values[keys.settings], undefined);
+  assert.deepEqual(subject.local.values[keys.normalHistory].map((event) => event.id), ['one', 'two']);
 });
 
 test('optimistic settings retry preserves typical interleaved patches from split workers', async () => {

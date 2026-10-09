@@ -30,7 +30,7 @@ function result(id, urls) {
   };
 }
 
-test('groups by the exact lowercase hostname while only stripping www. from the label', () => {
+test('groups and labels by the exact lowercase hostname', () => {
   const wwwFirst = result('www-first', ['https://WWW.Example.COM/one']);
   const wwwSecond = result('www-second', ['https://www.example.com/two']);
   const subdomain = result('subdomain', ['https://docs.example.com/guide']);
@@ -40,7 +40,7 @@ test('groups by the exact lowercase hostname while only stripping www. from the 
   assert.deepEqual(groups.map(({ key, domain, label, eventCount, tabCount }) => ({
     key, domain, label, eventCount, tabCount,
   })), [
-    { key: 'www.example.com', domain: 'www.example.com', label: 'example.com', eventCount: 2, tabCount: 2 },
+    { key: 'www.example.com', domain: 'www.example.com', label: 'www.example.com', eventCount: 2, tabCount: 2 },
     { key: 'docs.example.com', domain: 'docs.example.com', label: 'docs.example.com', eventCount: 1, tabCount: 1 },
   ]);
   assert.deepEqual(groups[0].results, [wwwFirst, wwwSecond]);

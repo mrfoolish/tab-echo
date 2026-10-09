@@ -10,7 +10,7 @@
     <div class="app-shell">
       <aside class="sidebar">
         <header class="brand">
-          <img src="icons/icon-32.png" alt="" width="28" height="28">
+          <img src="icons/icon-128.png" alt="" width="28" height="28">
           <div><strong>Tab Echo</strong><span id="modeLabel">Regular window · Closed tabs</span></div>
         </header>
         <nav id="dashboardNav" class="nav-list" aria-label="Dashboard">
@@ -25,7 +25,7 @@
           <label class="search-field" for="searchInput">
             <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4 4"/></svg>
             <span class="visually-hidden" data-i18n="searchLabel">Search closed tabs</span>
-            <input id="searchInput" type="search" autocomplete="off" placeholder="Search titles or URLs" data-i18n-placeholder="searchPlaceholder">
+            <input id="searchInput" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search titles or URLs" data-i18n-placeholder="searchPlaceholder">
             <kbd aria-hidden="true">/</kbd>
           </label>
           <button id="retryButton" class="secondary-button" type="button" hidden>Retry</button>
@@ -92,16 +92,15 @@
         <section id="settingsView" class="view-panel" aria-labelledby="settingsTitle" hidden>
           <div class="view-heading"><div><h1 id="settingsTitle" data-i18n="settings">Settings</h1><p id="settingsSummary" data-i18n="settingsIntro">Control retention for this extension.</p></div></div>
           <form id="settingsForm" class="settings-form" aria-busy="true">
-            <p id="settingsScope" class="settings-scope"></p>
             <h2 data-i18n="retentionSection">Storage and cleanup</h2>
             <div class="settings-section settings-retention">
-            <label><span data-i18n="maxRecords">Maximum records</span><input name="maxRecords" type="text" inputmode="numeric" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="alert"></small></label>
-            <label><span data-i18n="maxAgeDays">History retention (days)</span><input name="maxAgeDays" type="text" inputmode="numeric" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="alert"></small></label>
-            <label><span data-i18n="trashMaxAgeDays">Trash retention (days)</span><input name="trashMaxAgeDays" type="text" inputmode="numeric" placeholder="3" aria-describedby="trashAgeHelp trashMaxAgeDaysError"><small id="trashAgeHelp" data-i18n="trashAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="trashMaxAgeDaysError" class="field-error" role="alert"></small></label>
+            <label for="maxRecordsInput"><span data-i18n="maxRecords">Maximum records</span><input id="maxRecordsInput" name="maxRecords" type="text" inputmode="numeric" autocomplete="off" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="alert"></small></label>
+            <label for="maxAgeDaysInput"><span data-i18n="maxAgeDays">History retention (days)</span><input id="maxAgeDaysInput" name="maxAgeDays" type="text" inputmode="numeric" autocomplete="off" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="alert"></small></label>
+            <label for="trashMaxAgeDaysInput"><span data-i18n="trashMaxAgeDays">Trash retention (days)</span><input id="trashMaxAgeDaysInput" name="trashMaxAgeDays" type="text" inputmode="numeric" autocomplete="off" placeholder="3" aria-describedby="trashAgeHelp trashMaxAgeDaysError"><small id="trashAgeHelp" data-i18n="trashAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="trashMaxAgeDaysError" class="field-error" role="alert"></small></label>
             </div>
-            <h2 data-i18n="displaySection">Popup display</h2>
+            <h2 data-i18n="displaySection">Toolbar popup</h2>
             <div class="settings-section">
-            <label><span data-i18n="popupSize">Entries shown in popup</span><input name="popupSize" type="text" inputmode="numeric" placeholder="10" aria-describedby="popupSizeHelp popupSizeError"><small id="popupSizeHelp" data-i18n="popupSizeHelp">Enter an integer from 1 to 200.</small><small id="popupSizeError" class="field-error" role="alert"></small></label>
+            <label for="popupSizeInput"><span data-i18n="popupSize">Maximum records shown</span><input id="popupSizeInput" name="popupSize" type="text" inputmode="numeric" autocomplete="off" placeholder="10" aria-describedby="popupSizeHelp popupSizeError"><small id="popupSizeHelp" data-i18n="popupSizeHelp">The maximum number of closed-tab entries shown when you open Tab Echo from the browser toolbar. Choose from 1 to 200. This does not affect the full list or how many records are saved.</small><small id="popupSizeError" class="field-error" role="alert"></small></label>
             </div>
             <h2 data-i18n="appearanceSection">Appearance and language</h2>
             <div class="settings-section">
@@ -111,8 +110,9 @@
             <h2 data-i18n="exclusionsSection">Excluded domains</h2>
             <section class="domain-exclusions" aria-labelledby="excludedDomainsLabel">
               <label for="excludedDomainsInput"><span id="excludedDomainsLabel" data-i18n="excludedDomains">Excluded domains</span></label>
-              <textarea id="excludedDomainsInput" name="excludedDomains" rows="4" placeholder="example.com" aria-describedby="excludedDomainsHelp"></textarea>
-              <small id="excludedDomainsHelp" data-i18n="excludedDomainsHelp">One domain per line. A domain also excludes its subdomains. New rules only affect future closed tabs.</small>
+              <textarea id="excludedDomainsInput" name="excludedDomains" rows="4" placeholder="example.com" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="excludedDomainsHelp excludedDomainsError"></textarea>
+              <small id="excludedDomainsHelp" data-i18n="excludedDomainsHelp">Enter domains you don't want Tab Echo to record, one per line. For example, example.com also excludes all of its subdomains. By default, saved rules affect only new closed-tab entries; if existing entries match, you can choose whether to remove them when saving.</small>
+              <small id="excludedDomainsError" class="field-error" role="alert"></small>
             </section>
             <div id="settingsImpactPanel" class="settings-impact" role="alert" hidden>
               <p id="settingsImpactMessage"></p>

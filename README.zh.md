@@ -66,7 +66,10 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 │   ├── lib/
 │   │   ├── close-tracker.js          # 标签页/窗口快照与关闭分组
 │   │   ├── history-store.js          # 纯历史、搜索、保存规则与回收站模型
-│   │   └── storage-repository.js     # 分区存储、迁移与串行写入
+│   │   ├── storage-repository.js     # 设置、元数据和旧数组迁移
+│   │   ├── indexeddb-repository.js   # 分代 IndexedDB 记录与索引
+│   │   ├── indexeddb-migration.js    # 可恢复的本地数组迁移
+│   │   └── indexeddb-storage-repository.js # 原子切换数据代并兼容原仓储接口
 │   ├── dashboard.html/.css/.js       # 完整关闭记录、回收站与设置页面
 │   ├── popup.html/.css/.js           # 默认 10 条、可配置 1–200 条的紧凑工具栏界面
 │   ├── manifest.json

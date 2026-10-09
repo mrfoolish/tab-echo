@@ -88,6 +88,7 @@ function makeEvent(id, mode = 'normal', overrides = {}) {
 test('exports all partitioned v2 storage keys', () => {
   assert.deepEqual(STORAGE_KEYS, {
     settings: 'tabEcho:settings:v2',
+    settingsRevision: 'tabEcho:settings-revision:v2',
     history: {
       normal: 'tabEcho:history:normal:v2',
       incognito: 'tabEcho:history:incognito:v2',
@@ -96,10 +97,84 @@ test('exports all partitioned v2 storage keys', () => {
       normal: 'tabEcho:trash:normal:v2',
       incognito: 'tabEcho:trash:incognito:v2',
     },
+    revision: {
+      normal: 'tabEcho:revision:normal:v2',
+      incognito: 'tabEcho:revision:incognito:v2',
+    },
     migration: 'tabEcho:migration:v2',
     migrationNotice: 'tabEcho:migration-notice:v2',
     legacy: 'tabEchoState',
   });
+});
+
+test('context and settings revisions start at zero and advance with durable writes', async () => {
+  const storage = createStorageFake();
+  const repository = createStorageRepository(storage);
+
+  assert.deepEqual(await repository.readContext('normal'), {
+    settings: {
+      maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10,
+      pageSize: 50, language: 'en', theme: 'system', excludedDomains: [], settingsVersion: 2,
+    },
+    history: [], trash: [], revision: 0, settingsRevision: 0,
+  });
+
+  await repository.updateContext('normal', (context) => ({
+    ...context, history: [makeEvent('one')], result: 'saved',
+  }));
+  assert.equal((await repository.readContext('normal')).revision, 1);
+  assert.equal((await repository.readContext('incognito')).revision, 0);
+
+  await repository.saveSettings({
+    maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10,
+    pageSize: 25, language: 'en', theme: 'system', excludedDomains: [], settingsVersion: 2,
+  });
+  const afterSettings = await repository.readContext('normal');
+  assert.equal(afterSettings.settingsRevision, 1);
+  assert.equal(afterSettings.revision, 1);
+});
+
+test('atomic settings and context updates validate revisions before one durable write', async () => {
+  const storage = createStorageFake();
+  const repository = createStorageRepository(storage);
+
+  const result = await repository.updateSettingsAndContext('normal', (context) => {
+    assert.equal(context.revision, 0);
+    assert.equal(context.settingsRevision, 0);
+    return {
+      ...context,
+      settings: { ...context.settings, maxRecords: 25 },
+      history: [makeEvent('kept')],
+      result: { committed: true },
+    };
+  });
+
+  assert.deepEqual(result, { committed: true });
+  const committed = await repository.readContext('normal');
+  assert.equal(committed.settings.maxRecords, 25);
+  assert.deepEqual(committed.history.map((event) => event.id), ['kept']);
+  assert.equal(committed.revision, 1);
+  assert.equal(committed.settingsRevision, 1);
+  const write = storage.calls.set.at(-1);
+  assert.equal(write[STORAGE_KEYS.revision.normal], 1);
+  assert.equal(write[STORAGE_KEYS.settingsRevision], 1);
+  assert.ok(Object.hasOwn(write, STORAGE_KEYS.settings));
+  assert.ok(Object.hasOwn(write, STORAGE_KEYS.history.normal));
+  assert.ok(Object.hasOwn(write, STORAGE_KEYS.trash.normal));
+});
+
+test('failed revisioned writes leave persisted revisions unchanged', async () => {
+  const storage = createStorageFake();
+  const repository = createStorageRepository(storage, { retryLimit: 0 });
+  storage.failNextSets(1);
+
+  await assert.rejects(repository.updateContext('normal', (context) => ({
+    ...context, history: [makeEvent('not-saved')],
+  })), /updateContext\(normal\) failed/);
+
+  const current = await repository.readContext('normal');
+  assert.equal(current.revision, 0);
+  assert.deepEqual(current.history, []);
 });
 
 test('normal context updates never overwrite incognito partitions', async () => {

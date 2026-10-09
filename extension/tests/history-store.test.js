@@ -781,6 +781,22 @@ test('normalizes domain exclusions and matches the domain plus subdomains', () =
   assert.equal(filterEventByExcludedDomains(event('gone', TEST_NOW, 1, { tabs: [tab({ url: 'https://private.test' })] }), ['private.test']), null);
 });
 
+test('settings validation rejects invalid excluded domains instead of silently dropping them', () => {
+  const valid = validateSettingsInput({
+    ...DEFAULT_SETTINGS,
+    excludedDomains: ['example.com', 'HTTPS://WWW.Valid.test/path'],
+  });
+  assert.equal(valid.valid, true);
+  assert.deepEqual(valid.settings.excludedDomains, ['example.com', 'valid.test']);
+
+  const invalid = validateSettingsInput({
+    ...DEFAULT_SETTINGS,
+    excludedDomains: ['example.com', 'not a host'],
+  });
+  assert.equal(invalid.valid, false);
+  assert.match(invalid.errors.excludedDomains, /invalid hostname/);
+});
+
 test('previews and permanently deletes matching tabs without removing unrelated group tabs', () => {
   const history = [event('history-mixed', TEST_NOW, 2, { tabs: [
     tab({ id: 'h1', url: 'https://private.test/a', position: 0 }), tab({ id: 'h2', url: 'https://keep.test/b', position: 1 }),

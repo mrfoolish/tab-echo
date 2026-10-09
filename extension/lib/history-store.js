@@ -92,6 +92,12 @@
     settings.excludedDomains = normalizeExcludedDomains(source.excludedDomains);
     if (source.excludedDomains !== undefined && !Array.isArray(source.excludedDomains)) {
       errors.excludedDomains = 'excludedDomains must be an array of hostnames.';
+    } else if (Array.isArray(source.excludedDomains)) {
+      const invalid = source.excludedDomains.filter((value) => String(value || '').trim()
+        && !normalizeExcludedDomain(value));
+      if (invalid.length > 0) {
+        errors.excludedDomains = 'excludedDomains contains an invalid hostname.';
+      }
     }
 
     return {

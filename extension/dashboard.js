@@ -36,7 +36,9 @@
       expand: 'Expand group', collapse: 'Collapse group',
       moved: 'Moved {count} closed-tab entry or entries to Trash.', reopened: 'Reopened {count} tab(s).',
       partialReopen: 'Reopened {count} tab(s); {failed} failed.', requestFailed: 'Operation failed. Please try again.',
+      actionStale: 'Records changed after this preview. Nothing was removed; please review and confirm again.',
       storageWriteFailed: 'Could not save data to browser storage. Check available space and try again.',
+      invalidExcludedDomains: 'Enter valid hostnames only, one per line.',
       restoreEntry: 'Move back to Closed tabs', restoreResults: 'Move all back to Closed tabs', restoreSearchResults: 'Move back {count} results', deletePermanently: 'Remove now',
       emptyTrash: 'Empty Trash', trashListLabel: 'Trash entries', trashPaginationLabel: 'Trash pagination',
       trashLoading: 'Loading Trash…', trashEmptyTitle: 'Trash is empty', trashEmptyBody: 'Deleted entries appear here until they expire.',
@@ -47,20 +49,20 @@
       capacityError: 'Not enough history capacity. Free {count} more slot(s) before restoring.',
       settingsIntro: 'Manage retention, display, appearance, and exclusions.', settingsLoading: 'Loading settings…', settingsSaved: 'Settings saved.',
       settingsScope: 'Settings are shared. This preview only counts data in the current {mode}. The other browsing context applies the same settings later.',
-      retentionSection: 'Storage and cleanup', displaySection: 'Popup display', appearanceSection: 'Appearance and language', exclusionsSection: 'Excluded domains',
+      retentionSection: 'Storage and cleanup', displaySection: 'Toolbar popup', appearanceSection: 'Appearance and language', exclusionsSection: 'Excluded domains',
       settingsCleanupPending: 'Settings saved. Cleanup for this browsing context will finish on its next read or automatic cleanup.',
       settingsOtherPending: ' The other regular or incognito browsing context will apply these settings on its next start or read.',
       restoreRefreshFailed: 'Restored successfully, but refreshing the list failed. Please try again.',
       maxRecords: 'Maximum records', maxRecordsHelp: 'Blank means unlimited, and browser storage limits still apply.',
       maxAgeDays: 'History retention (days)', maxAgeHelp: 'Blank means kept indefinitely, and browser storage limits still apply.',
       trashMaxAgeDays: 'Trash retention (days)', trashAgeHelp: 'Blank means kept indefinitely, and browser storage limits still apply.',
-      popupSize: 'Entries shown in popup', popupSizeHelp: 'Enter an integer from 1 to 200.', defaultPageSize: 'Entries per page', language: 'Language', languageEnglish: 'English', languageChinese: 'Simplified Chinese',
+      popupSize: 'Maximum records shown', popupSizeHelp: 'The maximum number of closed-tab entries shown when you open Tab Echo from the browser toolbar. Choose from 1 to 200. This does not affect the full list or how many records are saved.', defaultPageSize: 'Entries per page', language: 'Language', languageEnglish: 'English', languageChinese: 'Simplified Chinese',
       theme: 'Theme', themeSystem: 'System', themeLight: 'Light', themeDark: 'Dark', groupMatch: '{matched} of {total} tabs match',
       saveSettings: 'Save settings', unlimited: 'Unlimited', invalidOptional: 'Enter a positive integer or leave blank.', invalidPopupSize: 'Enter an integer from 1 to 200.',
       settingsImpactWarning: 'These settings will permanently delete {historyEvents} closed records ({historyTabs} tabs) and {trashEvents} Trash records ({trashTabs} tabs). This cannot be undone.',
       exclusionImpactWarning: 'New excluded domains match {events} existing records ({tabs} tabs). New rules normally affect future records only.',
       confirmAndSave: 'Confirm and save', saveRulesOnly: 'Save rules only', saveAndRemove: 'Save and remove', saveRetentionOnly: 'Save and apply retention', saveAndRemoveAll: 'Save and remove all previewed data', cancel: 'Cancel',
-      excludedDomains: 'Excluded domains', excludedDomainsHelp: 'One domain per line. A domain also excludes its subdomains. New rules only affect future closed tabs.',
+      excludedDomains: 'Excluded domains', excludedDomainsHelp: "Enter domains you don't want Tab Echo to record, one per line. For example, example.com also excludes all of its subdomains. By default, saved rules affect only new closed-tab entries; if existing entries match, you can choose whether to remove them when saving.",
       deleteExistingMatches: 'Remove existing matches', confirmPermanentDelete: 'Remove now',
       excludedCleanupImpact: '{events} existing records contain {tabs} matching tabs. They will be permanently deleted, not moved to Trash.',
       excludedCleanupEmpty: 'No existing history or Trash entries match the saved exclusions.', excludedCleanupDone: 'Permanently deleted {tabs} matching tabs.',
@@ -92,7 +94,9 @@
       expand: '展开标签页组', collapse: '折叠标签页组',
       moved: '已将 {count} 条关闭记录移至回收站。', reopened: '已重新打开 {count} 个标签页。',
       partialReopen: '已重新打开 {count} 个标签页；{failed} 个失败。', requestFailed: '操作失败，请重试。',
+      actionStale: '预览后记录已发生变化，本次没有移除任何内容，请重新确认。',
       storageWriteFailed: '无法将数据保存到浏览器存储空间，请检查可用空间后重试。',
+      invalidExcludedDomains: '请仅填写有效域名，每行一个。',
       restoreEntry: '移回关闭记录', restoreResults: '全部移回关闭记录', restoreSearchResults: '移回 {count} 条搜索结果', deletePermanently: '直接移除',
       emptyTrash: '清空回收站', trashListLabel: '回收站记录', trashPaginationLabel: '回收站分页',
       trashLoading: '正在加载回收站…', trashEmptyTitle: '回收站为空', trashEmptyBody: '删除的记录会保留在这里，直到到期。',
@@ -101,22 +105,22 @@
       permanentlyDeleted: '已直接移除 {count} 条记录，无法恢复。', emptiedTrash: '已永久删除回收站中的 {count} 条记录。',
       confirmEmptyOne: '确定清空回收站吗？此操作不可恢复。', confirmEmptyTwo: '再次确认：永久删除回收站中的全部记录，此操作不可恢复。',
       capacityError: '历史容量不足，还需腾出 {count} 个可用名额才能恢复。',
-      settingsIntro: '管理保存规则、弹窗显示、外观和排除域名。', settingsLoading: '正在加载设置…', settingsSaved: '设置已保存。',
+      settingsIntro: '管理保存规则、工具栏弹窗、外观和排除域名。', settingsLoading: '正在加载设置…', settingsSaved: '设置已保存。',
       settingsScope: '设置在常规与无痕上下文间共享；本次预览只统计当前{mode}的数据，另一浏览上下文会在之后应用相同设置。',
-      retentionSection: '保存与清理', displaySection: '弹窗显示', appearanceSection: '外观与语言', exclusionsSection: '排除域名',
+      retentionSection: '保存与清理', displaySection: '工具栏弹窗', appearanceSection: '外观与语言', exclusionsSection: '排除域名',
       settingsCleanupPending: '设置已保存。当前浏览上下文的数据清理将在下次读取或自动清理时完成。',
       settingsOtherPending: '常规/无痕的另一浏览上下文会在其下次启动或读取时应用。',
       restoreRefreshFailed: '恢复成功，但列表刷新失败，请重试。',
       maxRecords: '最多保留记录数', maxRecordsHelp: '留空表示不限制，且仍受浏览器存储空间限制。',
       maxAgeDays: '历史保留天数', maxAgeHelp: '留空表示永久保留，且仍受浏览器存储空间限制。',
       trashMaxAgeDays: '回收站保留天数', trashAgeHelp: '留空表示永久保留，且仍受浏览器存储空间限制。',
-      popupSize: '弹窗显示条数', popupSizeHelp: '请输入 1–200 之间的整数。', defaultPageSize: '每页显示条数', language: '语言', languageEnglish: 'English', languageChinese: '简体中文',
+      popupSize: '最多显示记录数', popupSizeHelp: '打开浏览器工具栏中的 Tab Echo 弹窗时，最多显示多少条关闭记录。可设置 1–200 条，不影响完整列表和实际保存数量。', defaultPageSize: '每页显示条数', language: '语言', languageEnglish: 'English', languageChinese: '简体中文',
       theme: '主题', themeSystem: '跟随系统', themeLight: '浅色', themeDark: '深色', groupMatch: '命中 {matched} / {total} 个标签页',
       saveSettings: '保存设置', unlimited: '无限', invalidOptional: '请输入正整数或留空。', invalidPopupSize: '请输入 1–200 之间的整数。',
       settingsImpactWarning: '这些设置将永久删除 {historyEvents} 条关闭记录（{historyTabs} 个标签页），并清理 {trashEvents} 条回收站记录（{trashTabs} 个标签页）。此操作不可恢复。',
       exclusionImpactWarning: '新增排除域名命中已有 {events} 条记录（{tabs} 个标签页）。默认情况下，新规则只影响以后关闭的标签页。',
       confirmAndSave: '确认并保存', saveRulesOnly: '仅保存规则', saveAndRemove: '保存并移除', saveRetentionOnly: '保存并按保留规则清理', saveAndRemoveAll: '保存并移除全部预览数据', cancel: '取消',
-      excludedDomains: '排除域名', excludedDomainsHelp: '每行一个域名，同时匹配其子域名。新规则只影响今后关闭的标签页。',
+      excludedDomains: '排除域名', excludedDomainsHelp: '填写不希望 Tab Echo 记录的网站域名，每行一个。例如填写 example.com，也会排除其所有子域名。保存后默认只影响新产生的关闭记录；如命中已有记录，保存时可选择是否一并移除。',
       deleteExistingMatches: '移除已有匹配记录', confirmPermanentDelete: '直接移除',
       excludedCleanupImpact: '现有历史和回收站中有 {events} 条记录包含 {tabs} 个匹配标签页。它们将被永久删除，不会移入回收站。',
       excludedCleanupEmpty: '现有历史和回收站中没有匹配已保存排除规则的记录。', excludedCleanupDone: '已永久删除 {tabs} 个匹配标签页。',
@@ -171,6 +175,28 @@
       tabCount += Number(result.totalTabCount) || 0;
     }
     return { eventIds, eventCount: eventIds.length, tabCount };
+  }
+
+  function readStatistics(response, results = []) {
+    const source = response && response.statistics;
+    const count = (value, fallback = 0) => {
+      const number = Number(value);
+      return Number.isSafeInteger(number) && number >= 0 ? number : fallback;
+    };
+    if (source && typeof source === 'object') {
+      return {
+        revision: count(source.revision), totalRecords: count(source.totalRecords), totalTabs: count(source.totalTabs),
+        matchingRecords: count(source.matchingRecords), matchingTabs: count(source.matchingTabs),
+        resultTabs: count(source.resultTabs), displayedRecords: count(source.displayedRecords),
+      };
+    }
+    return {
+      revision: count(response && response.revision), totalRecords: count(response && response.totalEventCount),
+      totalTabs: count(response && response.totalTabCount), matchingRecords: count(response && response.resultEventCount),
+      matchingTabs: count(response && response.matchedTabCount),
+      resultTabs: count(response && response.resultTabCount, getResultSelection(results).tabCount),
+      displayedRecords: results.length,
+    };
   }
 
   function sortTrashResults(results) {
@@ -319,7 +345,6 @@
       trashEmptyPanel: doc.getElementById('trashEmptyPanel'), trashEmptyMessage: doc.getElementById('trashEmptyMessage'),
       confirmEmptyTrash: doc.getElementById('confirmEmptyTrashButton'), cancelEmptyTrash: doc.getElementById('cancelEmptyTrashButton'),
       saveSettings: doc.getElementById('saveSettingsButton'),
-      settingsScope: doc.getElementById('settingsScope'),
       settingsImpactPanel: doc.getElementById('settingsImpactPanel'), settingsImpactMessage: doc.getElementById('settingsImpactMessage'),
       confirmSettings: doc.getElementById('confirmSettingsButton'), confirmSettingsAndRemove: doc.getElementById('confirmSettingsAndRemoveButton'), cancelSettingsImpact: doc.getElementById('cancelSettingsImpactButton'),
       historyLayoutToggle: doc.getElementById('historyLayoutToggle'), domainHistoryView: doc.getElementById('domainHistoryView'),
@@ -353,7 +378,6 @@
       elements.historyLayoutToggle.setAttribute('aria-label', t('historyLayoutLabel'));
       elements.domainIndex.setAttribute('aria-label', t('domainIndexLabel'));
       elements.retry.textContent = t('retry');
-      elements.settingsScope.textContent = t('settingsScope', { mode: t(state.mode === 'incognito' ? 'incognitoMode' : 'regularMode') });
       const viewLabel = t(state.view === 'history' ? 'closedTabs' : state.view);
       elements.modeLabel.textContent = `${t(state.mode === 'incognito' ? 'incognitoMode' : 'regularMode')} · ${t('closedTabs')}`;
       doc.title = `Tab Echo - ${viewLabel}`;
@@ -362,12 +386,15 @@
     function showStatus(message, isError = false) {
       root.clearTimeout(state.statusTimer);
       state.statusError = Boolean(message && isError);
+      elements.status.setAttribute('role', isError ? 'alert' : 'status');
+      elements.status.setAttribute('aria-live', isError ? 'assertive' : 'polite');
       elements.status.textContent = message || '';
       elements.status.classList.toggle('is-error', isError);
       if (message && !isError) state.statusTimer = root.setTimeout(() => { elements.status.textContent = ''; }, 5000);
     }
 
     function errorMessage(error) {
+      if (error && ['ACTION_STALE', 'ACTION_TOKEN_INVALID', 'ACTION_TOKEN_EXPIRED'].includes(error.code)) return t('actionStale');
       return t(error && error.code === 'STORAGE_WRITE_FAILED' ? 'storageWriteFailed' : 'requestFailed');
     }
 
@@ -701,7 +728,7 @@
       if (options.restoreFocus && pending) (pending.kind === 'history' ? elements.removeHistory : elements.emptyTrash).focus();
     }
 
-    function showHistoryRemovalConfirmation() {
+    async function showHistoryRemovalConfirmation() {
       if (!currentResource('history')) return;
       const data = state.history; const query = state.query.trim();
       const groups = domainGroups && state.historyLayout === 'domain' ? domainGroups.buildDomainGroups(data.results) : [];
@@ -709,18 +736,46 @@
       const scoped = selected ? getResultSelection(selected.results) : null;
       const domainLabel = selected ? (selected.key === '__multiple_domains__' ? t('multipleDomains') : (selected.key === '__unknown_domain__' ? t('unknownDomain') : selected.label)) : '';
       const eventCount = scoped ? scoped.eventCount : (query ? data.resultEventCount : data.totalEventCount);
-      const tabCount = scoped ? scoped.tabCount : (query ? (data.resultTabCount || getResultSelection(data.results).tabCount) : data.totalTabCount);
       if (!eventCount) return;
-      clearDestructiveConfirmation(); state.pendingDestructiveAction = { kind: 'history', query, eventCount, tabCount, eventIds: scoped ? scoped.eventIds : null };
-      elements.historyRemoveMessage.textContent = t(scoped ? 'confirmRemoveDomain' : (query ? 'confirmRemoveSearch' : 'confirmRemoveHistory'), { events: eventCount, tabs: tabCount, domain: domainLabel });
-      elements.historyRemovePanel.hidden = false; elements.confirmHistoryRemove.focus();
+      const requestToken = data.token;
+      const request = scoped
+        ? { type: 'prepare-destructive-action', operation: 'delete-history', eventIds: scoped.eventIds }
+        : { type: 'prepare-destructive-action', operation: 'delete-history', all: true, query };
+      if (!beginAction(state.actionPending, 'prepare:history-removal')) return;
+      clearDestructiveConfirmation(); renderHistory();
+      try {
+        const prepared = await sendMessage(request);
+        if (!currentResource('history') || requestToken !== data.token || query !== state.query.trim()) return;
+        state.pendingDestructiveAction = { kind: 'history', token: prepared.token };
+        elements.historyRemoveMessage.textContent = t(scoped ? 'confirmRemoveDomain' : (query ? 'confirmRemoveSearch' : 'confirmRemoveHistory'), {
+          events: prepared.eventCount, tabs: prepared.tabCount, domain: domainLabel,
+        });
+        elements.historyRemovePanel.hidden = false; elements.confirmHistoryRemove.focus();
+      } catch (error) {
+        showStatus(errorMessage(error), true);
+      } finally {
+        endAction(state.actionPending, 'prepare:history-removal');
+        if (state.view === 'history') renderHistory();
+      }
     }
 
-    function showTrashEmptyConfirmation() {
+    async function showTrashEmptyConfirmation() {
       if (!currentResource('trash') || !state.trash.totalEventCount) return;
-      clearDestructiveConfirmation(); state.pendingDestructiveAction = { kind: 'trash', eventCount: state.trash.totalEventCount, tabCount: state.trash.totalTabCount };
-      elements.trashEmptyMessage.textContent = t('confirmEmptyTrash', { events: state.trash.totalEventCount, tabs: state.trash.totalTabCount });
-      elements.trashEmptyPanel.hidden = false; elements.confirmEmptyTrash.focus();
+      const requestToken = state.trash.token;
+      if (!beginAction(state.actionPending, 'prepare:empty-trash')) return;
+      clearDestructiveConfirmation(); renderTrash();
+      try {
+        const prepared = await sendMessage({ type: 'prepare-destructive-action', operation: 'empty-trash' });
+        if (!currentResource('trash') || requestToken !== state.trash.token) return;
+        state.pendingDestructiveAction = { kind: 'trash', token: prepared.token };
+        elements.trashEmptyMessage.textContent = t('confirmEmptyTrash', { events: prepared.eventCount, tabs: prepared.tabCount });
+        elements.trashEmptyPanel.hidden = false; elements.confirmEmptyTrash.focus();
+      } catch (error) {
+        showStatus(errorMessage(error), true);
+      } finally {
+        endAction(state.actionPending, 'prepare:empty-trash');
+        if (state.view === 'trash') renderTrash();
+      }
     }
 
     function syncSettings(settings) {
@@ -755,8 +810,11 @@
         if (token !== data.token) return { ok: false, stale: true };
         data.loading = false; data.loadedQuery = requestedQuery; state.expanded = new Map();
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal';
-        data.results = Array.isArray(response.results) ? response.results : []; data.resultEventCount = Number(response.resultEventCount) || 0;
-        data.matchedTabCount = Number(response.matchedTabCount) || 0; data.resultTabCount = Number(response.resultTabCount) || getResultSelection(data.results).tabCount; data.totalEventCount = Number(response.totalEventCount) || 0; data.totalTabCount = Number(response.totalTabCount) || 0;
+        data.results = Array.isArray(response.results) ? response.results : [];
+        const counts = readStatistics(response, data.results);
+        data.resultEventCount = counts.matchingRecords; data.matchedTabCount = counts.matchingTabs;
+        data.resultTabCount = counts.resultTabs; data.totalEventCount = counts.totalRecords;
+        data.totalTabCount = counts.totalTabs; data.displayedRecords = counts.displayedRecords; data.revision = counts.revision;
         syncSettings(response.settings); if (state.view === 'history') { if (state.statusError) showStatus(''); renderHistory(); } return { ok: true };
       } catch (error) {
         if (token === data.token) { data.loading = false; data.loadedQuery = null; if (state.view === 'history') showError(error); }
@@ -772,8 +830,10 @@
         if (token !== data.token) return { ok: false, stale: true };
         data.loading = false; data.loadedQuery = requestedQuery; state.expanded = new Map();
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal'; data.results = sortTrashResults(response.results);
-        data.resultEventCount = Number(response.resultEventCount) || 0; data.matchedTabCount = Number(response.matchedTabCount) || 0;
-        data.totalEventCount = Number(response.totalEventCount) || 0; data.totalTabCount = Number(response.totalTabCount) || 0;
+        const counts = readStatistics(response, data.results);
+        data.resultEventCount = counts.matchingRecords; data.matchedTabCount = counts.matchingTabs;
+        data.resultTabCount = counts.resultTabs; data.totalEventCount = counts.totalRecords;
+        data.totalTabCount = counts.totalTabs; data.displayedRecords = counts.displayedRecords; data.revision = counts.revision;
         syncSettings(response.settings); if (state.view === 'trash') { if (state.statusError) showStatus(''); renderTrash(); } return { ok: true };
       } catch (error) {
         if (token === data.token) { data.loading = false; data.loadedQuery = null; if (state.view === 'trash') { const message = errorMessage(error); showStatus(message, true); elements.retry.hidden = false; elements.trashList.replaceChildren(makeStateNode('error-state', message, message)); } }
@@ -782,10 +842,23 @@
     }
 
     function clearSettingsErrors() {
-      for (const name of ['maxRecords', 'maxAgeDays', 'trashMaxAgeDays', 'popupSize']) {
+      for (const name of ['maxRecords', 'maxAgeDays', 'trashMaxAgeDays', 'popupSize', 'excludedDomains']) {
         const input = elements.settingsForm.elements[name]; const error = doc.getElementById(`${name}Error`);
-        if (input) input.removeAttribute('aria-invalid'); if (error) error.textContent = '';
+        if (input) {
+          input.removeAttribute('aria-invalid');
+          if (typeof input.setCustomValidity === 'function') input.setCustomValidity('');
+        }
+        if (error) error.textContent = '';
       }
+    }
+
+    function clearSettingsFieldError(event) {
+      const input = event && event.target;
+      if (!input || !input.name) return;
+      const error = doc.getElementById(`${input.name}Error`);
+      input.removeAttribute('aria-invalid');
+      if (typeof input.setCustomValidity === 'function') input.setCustomValidity('');
+      if (error) error.textContent = '';
     }
 
     function clearSettingsImpact() {
@@ -797,12 +870,12 @@
       elements.confirmSettingsAndRemove.hidden = true;
     }
 
-    function showSettingsImpact(settings, impact) {
+    function showSettingsImpact(settings, impact, token) {
       const counts = getImpactCounts(impact);
       const retention = getImpactCounts(impact && (impact.retention || impact));
       const exclusions = getImpactCounts(impact && impact.exclusions);
       const hasRetention = retention.totalEvents > 0; const hasExclusions = exclusions.totalEvents > 0;
-      state.pendingSettingsConfirmation = { settings: { ...settings }, impact, hasRetention, hasExclusions };
+      state.pendingSettingsConfirmation = { settings: { ...settings }, impact, hasRetention, hasExclusions, token };
       const messages = [];
       messages.push(t('settingsScope', { mode: t(state.mode === 'incognito' ? 'incognitoMode' : 'regularMode') }));
       if (hasRetention) messages.push(t('settingsImpactWarning', retention));
@@ -819,7 +892,12 @@
       clearSettingsErrors(); let first = null;
       for (const [name, message] of Object.entries(fields || {})) {
         const input = elements.settingsForm.elements[name]; const error = doc.getElementById(`${name}Error`);
-        if (!input || !error) continue; input.setAttribute('aria-invalid', 'true'); error.textContent = t(name === 'popupSize' ? 'invalidPopupSize' : 'invalidOptional'); if (!first) first = input;
+        if (!input || !error) continue;
+        const localizedMessage = t(name === 'popupSize' ? 'invalidPopupSize' : (name === 'excludedDomains' ? 'invalidExcludedDomains' : 'invalidOptional'));
+        input.setAttribute('aria-invalid', 'true');
+        if (typeof input.setCustomValidity === 'function') input.setCustomValidity(localizedMessage);
+        error.textContent = localizedMessage;
+        if (!first) first = input;
       }
       if (first) first.focus();
     }
@@ -856,10 +934,10 @@
         const statusKey = successKey === 'reopened' && failures > 0 ? 'partialReopen' : successKey;
         if (state.view === 'history') {
           const feedback = t(statusKey, { count: response.moved || response.reopened || response.deleted || 0, failed: failures });
-          if (message.type === 'move-to-trash' || message.type === 'permanently-delete-history') await refreshHistory();
+          if (['move-to-trash', 'permanently-delete-history', 'commit-destructive-action'].includes(message.type)) await refreshHistory();
           if (state.view === 'history') showStatus(feedback);
         }
-        else if (message.type === 'move-to-trash' || message.type === 'permanently-delete-history') state.history.loadedQuery = null;
+        else if (['move-to-trash', 'permanently-delete-history', 'commit-destructive-action'].includes(message.type)) state.history.loadedQuery = null;
       } catch (error) { if (state.view === 'history') showStatus(errorMessage(error), true); }
       finally { endAction(state.actionPending, actionKey); if (state.view === 'history') renderHistory(); else if (state.view === 'trash') renderTrash(); }
     }
@@ -931,8 +1009,9 @@
     });
     elements.emptyTrash.addEventListener('click', showTrashEmptyConfirmation);
     elements.confirmEmptyTrash.addEventListener('click', () => {
-      if (!state.pendingDestructiveAction || state.pendingDestructiveAction.kind !== 'trash') return;
-      clearDestructiveConfirmation(); mutateTrash({ type: 'empty-trash' }, 'emptiedTrash', 'empty:trash');
+      const pending = state.pendingDestructiveAction;
+      if (!pending || pending.kind !== 'trash') return;
+      clearDestructiveConfirmation(); mutateTrash({ type: 'commit-destructive-action', token: pending.token }, 'emptiedTrash', 'empty:trash');
     });
     elements.cancelEmptyTrash.addEventListener('click', () => clearDestructiveConfirmation({ restoreFocus: true }));
     elements.trashPageSize.addEventListener('change', () => { state.pageSize = Number(elements.trashPageSize.value); state.page = 1; updateUrl(); renderTrash(); });
@@ -958,17 +1037,16 @@
     elements.confirmHistoryRemove.addEventListener('click', () => {
       const pending = state.pendingDestructiveAction; if (!pending || pending.kind !== 'history') return;
       clearDestructiveConfirmation();
-      const message = pending.eventIds
-        ? { type: 'permanently-delete-history', eventIds: pending.eventIds }
-        : { type: 'permanently-delete-history', all: true, query: pending.query };
-      mutate(message, 'permanentlyDeleted', 'remove:results');
+      mutate({ type: 'commit-destructive-action', token: pending.token }, 'permanentlyDeleted', 'remove:results');
     });
     elements.cancelHistoryRemove.addEventListener('click', () => clearDestructiveConfirmation({ restoreFocus: true }));
     async function saveSettings(settings, options = {}) {
       if (!beginAction(state.actionPending, 'save:settings')) return; const token = ++state.settingsRequestToken;
       elements.saveSettings.disabled = true; elements.confirmSettings.disabled = true; clearSettingsErrors();
       try {
-        const saved = await sendMessage({ type: 'save-settings', settings, removeExistingExcludedMatches: options.removeExistingExcludedMatches === true });
+        const saved = options.token
+          ? await sendMessage({ type: 'commit-destructive-action', token: options.token, removeExistingExcludedMatches: options.removeExistingExcludedMatches === true })
+          : await sendMessage({ type: 'save-settings', settings });
         if (token !== state.settingsRequestToken || state.view !== 'settings') return; clearSettingsImpact(); syncSettings(saved.settings);
         let message = t(saved.cleanupPending ? 'settingsCleanupPending' : 'settingsSaved'); if (saved.otherContextPending) message += t('settingsOtherPending');
         elements.settingsSummary.textContent = message; showStatus(message);
@@ -992,19 +1070,22 @@
         const preview = await sendMessage({ type: 'preview-settings-impact', settings });
         if (token !== state.settingsRequestToken || state.view !== 'settings') return;
         const normalizedSettings = preview.settings || settings;
-        if (getImpactCounts(preview.impact).totalEvents > 0) showSettingsImpact(normalizedSettings, preview.impact);
+        if (getImpactCounts(preview.impact).totalEvents > 0) {
+          if (!preview.token) throw Object.assign(new Error('Missing destructive settings token.'), { code: 'ACTION_TOKEN_INVALID' });
+          showSettingsImpact(normalizedSettings, preview.impact, preview.token);
+        }
         else await saveSettings(normalizedSettings);
       } catch (error) {
         if (token === state.settingsRequestToken && state.view === 'settings') { if (error.code === 'INVALID_SETTINGS' && error.fields) showSettingsErrors(error.fields); else showStatus(errorMessage(error), true); }
       } finally { endAction(state.actionPending, 'preview:settings'); if (token === state.settingsRequestToken && state.view === 'settings') elements.saveSettings.disabled = false; }
     });
-    elements.settingsForm.addEventListener('input', clearSettingsImpact);
+    elements.settingsForm.addEventListener('input', (event) => { clearSettingsImpact(); clearSettingsFieldError(event); });
     elements.settingsForm.addEventListener('change', clearSettingsImpact);
     elements.confirmSettings.addEventListener('click', async () => {
-      const pending = state.pendingSettingsConfirmation; if (!pending) return; await saveSettings(pending.settings, { removeExistingExcludedMatches: false });
+      const pending = state.pendingSettingsConfirmation; if (!pending) return; await saveSettings(pending.settings, { token: pending.token, removeExistingExcludedMatches: false });
     });
     elements.confirmSettingsAndRemove.addEventListener('click', async () => {
-      const pending = state.pendingSettingsConfirmation; if (!pending || !pending.hasExclusions) return; await saveSettings(pending.settings, { removeExistingExcludedMatches: true });
+      const pending = state.pendingSettingsConfirmation; if (!pending || !pending.hasExclusions) return; await saveSettings(pending.settings, { token: pending.token, removeExistingExcludedMatches: true });
     });
     elements.cancelSettingsImpact.addEventListener('click', clearSettingsImpact);
     elements.retry.addEventListener('click', () => { if (state.view === 'history') refreshHistory(); else if (state.view === 'trash') refreshTrash(); else refreshSettings(); });
@@ -1058,7 +1139,7 @@
 
   return {
     appendHighlightedText, beginAction, buildRetentionPatch, buildTabRangeKeys, buildUrlState, endAction, getImpactCounts, getResultSelection,
-    isGroupExpanded, isLoadedResultCurrent, paginateResults, parseExcludedDomainsInput, parseUrlState, resolveDomainSelection, resolveRenderPage, start,
+    isGroupExpanded, isLoadedResultCurrent, paginateResults, parseExcludedDomainsInput, parseUrlState, readStatistics, resolveDomainSelection, resolveRenderPage, start,
     sortTrashResults,
   };
 });

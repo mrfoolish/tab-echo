@@ -66,7 +66,10 @@ The manifest permissions are deliberately limited:
 │   ├── lib/
 │   │   ├── close-tracker.js          # tab/window snapshots and close grouping
 │   │   ├── history-store.js          # pure history, search, retention, and Trash model
-│   │   └── storage-repository.js     # partitioned storage, migration, serialized writes
+│   │   ├── storage-repository.js     # settings, metadata, and legacy array migration
+│   │   ├── indexeddb-repository.js   # versioned IndexedDB record generations and indexes
+│   │   ├── indexeddb-migration.js    # resumable local-array to IndexedDB migration
+│   │   └── indexeddb-storage-repository.js # atomic generation switching and repository contract
 │   ├── dashboard.html/.css/.js       # full closed-tabs, Trash, and settings page
 │   ├── popup.html/.css/.js           # compact configurable-result toolbar UI
 │   ├── manifest.json

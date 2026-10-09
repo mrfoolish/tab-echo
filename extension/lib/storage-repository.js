@@ -13,6 +13,7 @@
   const MIGRATION_VERSION = 2;
   const STORAGE_KEYS = Object.freeze({
     settings: 'tabEcho:settings:v2',
+    settingsRevision: 'tabEcho:settings-revision:v2',
     history: Object.freeze({
       normal: 'tabEcho:history:normal:v2',
       incognito: 'tabEcho:history:incognito:v2',
@@ -20,6 +21,10 @@
     trash: Object.freeze({
       normal: 'tabEcho:trash:normal:v2',
       incognito: 'tabEcho:trash:incognito:v2',
+    }),
+    revision: Object.freeze({
+      normal: 'tabEcho:revision:normal:v2',
+      incognito: 'tabEcho:revision:incognito:v2',
     }),
     migration: 'tabEcho:migration:v2',
     migrationNotice: 'tabEcho:migration-notice:v2',
@@ -111,6 +116,11 @@
 
   function equivalent(left, right) {
     return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function normalizeRevision(value) {
+    const revision = Number(value);
+    return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
   }
 
   function createStorageRepository(storageArea, options = {}) {
@@ -211,9 +221,13 @@
         throw new SettingsValidationError(validation.errors);
       }
       const settings = historyStore.normalizeSettings(validation.settings);
-      await writeWithRetry('saveSettings', async () => ({
+      const current = await getMany(STORAGE_KEYS.settingsRevision);
+      const settingsRevision = normalizeRevision(readValue(current, STORAGE_KEYS.settingsRevision)) + 1;
+      const payload = {
         [STORAGE_KEYS.settings]: settings,
-      }));
+        [STORAGE_KEYS.settingsRevision]: settingsRevision,
+      };
+      await writeWithRetry('saveSettings', async () => payload);
       return clone(settings);
     }
 
@@ -233,12 +247,20 @@
 
     async function readContext(mode) {
       const activeMode = assertMode(mode);
-      const keys = [STORAGE_KEYS.settings, STORAGE_KEYS.history[activeMode], STORAGE_KEYS.trash[activeMode]];
+      const keys = [
+        STORAGE_KEYS.settings,
+        STORAGE_KEYS.settingsRevision,
+        STORAGE_KEYS.history[activeMode],
+        STORAGE_KEYS.trash[activeMode],
+        STORAGE_KEYS.revision[activeMode],
+      ];
       const result = await getMany(keys);
       return {
         settings: historyStore.normalizeSettings(readValue(result, STORAGE_KEYS.settings)),
         history: normalizeEventList(readValue(result, STORAGE_KEYS.history[activeMode]), activeMode),
         trash: normalizeTrashList(readValue(result, STORAGE_KEYS.trash[activeMode]), activeMode),
+        revision: normalizeRevision(readValue(result, STORAGE_KEYS.revision[activeMode])),
+        settingsRevision: normalizeRevision(readValue(result, STORAGE_KEYS.settingsRevision)),
       };
     }
 
@@ -261,11 +283,13 @@
       );
       const committed = { settings: current.settings, history, trash };
       const returnValue = Object.hasOwn(mutation, 'result') ? mutation.result : committed;
+      const revision = current.revision + 1;
       // Clone before storage.set so clone failures cannot happen after a successful commit.
       const preparedResult = clone(returnValue);
       const payload = clone({
         [STORAGE_KEYS.history[mode]]: history,
         [STORAGE_KEYS.trash[mode]]: trash,
+        [STORAGE_KEYS.revision[mode]]: revision,
       });
       let lastWriteError;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -282,6 +306,62 @@
     function updateContext(mode, mutator) {
       const activeMode = assertMode(mode);
       const run = queues[activeMode].then(() => performUpdate(activeMode, mutator));
+      queues[activeMode] = run.catch(() => undefined);
+      return run;
+    }
+
+    async function performSettingsAndContextUpdate(mode, mutator) {
+      if (typeof mutator !== 'function') {
+        throw new TypeError('mutator must be a function.');
+      }
+      const current = await readContext(mode);
+      const mutation = await mutator(clone(current));
+      if (!mutation || typeof mutation !== 'object') {
+        throw new TypeError('mutator must return an object.');
+      }
+      const settingsInput = Object.hasOwn(mutation, 'settings') ? mutation.settings : current.settings;
+      const validation = historyStore.validateSettingsInput(settingsInput);
+      if (!validation.valid) {
+        throw new SettingsValidationError(validation.errors);
+      }
+      const settings = historyStore.normalizeSettings(validation.settings);
+      const history = normalizeEventList(
+        Object.hasOwn(mutation, 'history') ? mutation.history : current.history,
+        mode,
+      );
+      const trash = normalizeTrashList(
+        Object.hasOwn(mutation, 'trash') ? mutation.trash : current.trash,
+        mode,
+      );
+      const contextChanged = !equivalent(history, current.history) || !equivalent(trash, current.trash);
+      const settingsChanged = !equivalent(settings, current.settings);
+      const revision = current.revision + (contextChanged ? 1 : 0);
+      const settingsRevision = current.settingsRevision + (settingsChanged ? 1 : 0);
+      const committed = { settings, history, trash, revision, settingsRevision };
+      const returnValue = Object.hasOwn(mutation, 'result') ? mutation.result : committed;
+      const preparedResult = clone(returnValue);
+      const payload = clone({
+        [STORAGE_KEYS.settings]: settings,
+        [STORAGE_KEYS.settingsRevision]: settingsRevision,
+        [STORAGE_KEYS.history[mode]]: history,
+        [STORAGE_KEYS.trash[mode]]: trash,
+        [STORAGE_KEYS.revision[mode]]: revision,
+      });
+      let lastWriteError;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await storageArea.set(payload);
+          return preparedResult;
+        } catch (error) {
+          lastWriteError = error;
+        }
+      }
+      throw new StorageWriteError(`updateSettingsAndContext(${mode})`, maxAttempts, lastWriteError);
+    }
+
+    function updateSettingsAndContext(mode, mutator) {
+      const activeMode = assertMode(mode);
+      const run = queues[activeMode].then(() => performSettingsAndContextUpdate(activeMode, mutator));
       queues[activeMode] = run.catch(() => undefined);
       return run;
     }
@@ -506,10 +586,12 @@
       getMigrationNotice,
       getSettings,
       migrateLegacyState,
+      readContext,
       readHistory,
       readTrash,
       saveSettings,
       updateContext,
+      updateSettingsAndContext,
     };
   }
 
