@@ -6,8 +6,9 @@
   root.TabEchoIndexedDbRepository = factory();
 })(typeof globalThis !== 'undefined' ? globalThis : this, function createModule() {
   const DATABASE_NAME = 'tab-echo-records';
-  const DATABASE_VERSION = 2;
+  const DATABASE_VERSION = 3;
   const STORE_NAMES = Object.freeze({ history: 'history', trash: 'trash' });
+  const METADATA_STORE_NAME = 'metadata';
   const INDEX_NAMES = Object.freeze({
     modeGeneration: 'mode-generation',
     modeGenerationClosedAt: 'mode-generation-closed-at',
@@ -102,6 +103,65 @@
     });
   }
 
+  async function readGenerationPageFromIndex(index, range, options = {}) {
+    const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
+    const direction = options.direction === 'next' ? 'next' : 'prev';
+    const count = Number(await requestResult(index.count(range))) || 0;
+    const records = [];
+    if (offset >= count) return { records, total: count };
+    const request = index.openCursor(range, direction);
+    let seen = 0;
+    await new Promise((resolve, reject) => {
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || records.length >= limit) { resolve(); return; }
+        if (seen >= offset) records.push(clone(cursor.value));
+        seen += 1;
+        if (records.length >= limit) { resolve(); return; }
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error || new Error('IndexedDB cursor failed.'));
+    });
+    return { records, total: count };
+  }
+
+  async function scanGenerationPageFromIndex(index, range, options = {}, transform = (value) => value) {
+    const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
+    const direction = options.direction === 'next' ? 'next' : 'prev';
+    const records = [];
+    const statistics = {
+      totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0,
+    };
+    const request = index.openCursor(range, direction);
+    await new Promise((resolve, reject) => {
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        try {
+          const event = clone(cursor.value && cursor.value.event);
+          const tabCount = Array.isArray(event && event.tabs) ? event.tabs.length : 0;
+          statistics.totalRecords += 1;
+          statistics.totalTabs += tabCount;
+          const mapped = transform(event);
+          if (mapped !== null && mapped !== undefined) {
+            const matchIndex = statistics.matchingRecords;
+            statistics.matchingRecords += 1;
+            statistics.matchingTabs += Number(mapped.matchedTabCount) || 0;
+            statistics.resultTabs += Number(mapped.totalTabCount) || tabCount;
+            if (matchIndex >= offset && records.length < limit) records.push(clone(mapped));
+          }
+          cursor.continue();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      request.onerror = () => reject(request.error || new Error('IndexedDB cursor failed.'));
+    });
+    return { records, statistics };
+  }
+
   function createIndexes(store, storeName) {
     const ensureIndex = (name, keyPath, options) => {
       if (!store.indexNames.contains(name)) store.createIndex(name, keyPath, options);
@@ -132,6 +192,9 @@
           : database.createObjectStore(storeName, { keyPath: 'storageKey' });
         createIndexes(store, storeName);
       }
+      if (!database.objectStoreNames.contains(METADATA_STORE_NAME)) {
+        database.createObjectStore(METADATA_STORE_NAME, { keyPath: 'storageKey' });
+      }
     };
     return requestResult(request);
   }
@@ -156,6 +219,18 @@
       return keyRange.only([assertMode(mode), normalizeGeneration(generation)]);
     }
 
+    function generationTimeRange(mode, generation) {
+      if (!keyRange || typeof keyRange.bound !== 'function') {
+        throw new Error('IDBKeyRange is unavailable.');
+      }
+      const prefix = [assertMode(mode), normalizeGeneration(generation)];
+      return keyRange.bound([...prefix, Number.MIN_SAFE_INTEGER], [...prefix, Number.MAX_SAFE_INTEGER]);
+    }
+
+    function metadataKey(mode, generation) {
+      return [assertMode(mode), normalizeGeneration(generation)];
+    }
+
     async function deleteStoreGeneration(store, mode, generation) {
       const request = store.index(INDEX_NAMES.modeGeneration)
         .openCursor(generationRange(mode, generation));
@@ -172,11 +247,12 @@
 
     async function resetGeneration(mode, generation) {
       const db = await database();
-      const transaction = db.transaction(Object.values(STORE_NAMES), 'readwrite');
+      const transaction = db.transaction([...Object.values(STORE_NAMES), METADATA_STORE_NAME], 'readwrite');
       const done = transactionDone(transaction);
       await Promise.all(Object.values(STORE_NAMES).map((storeName) => deleteStoreGeneration(
         transaction.objectStore(storeName), mode, generation,
       )));
+      transaction.objectStore(METADATA_STORE_NAME).delete(metadataKey(mode, generation));
       await done;
     }
 
@@ -204,6 +280,136 @@
         .index(INDEX_NAMES.modeGeneration).getAll(generationRange(mode, generation)));
       await done;
       return records.map((record) => clone(record.event));
+    }
+
+    async function readGenerationPage(storeName, mode, generation, options = {}) {
+      const activeStore = assertStoreName(storeName);
+      const db = await database();
+      const transaction = db.transaction(activeStore, 'readonly');
+      const done = transactionDone(transaction);
+      const indexName = activeStore === STORE_NAMES.history
+        ? INDEX_NAMES.modeGenerationClosedAt : INDEX_NAMES.modeGenerationDeletedAt;
+      const page = await readGenerationPageFromIndex(
+        transaction.objectStore(activeStore).index(indexName),
+        generationTimeRange(mode, generation),
+        options,
+      );
+      await done;
+      return { records: page.records.map((record) => clone(record.event)), total: page.total };
+    }
+
+    async function scanGenerationPage(storeName, mode, generation, options = {}, transform) {
+      const activeStore = assertStoreName(storeName);
+      const db = await database();
+      const transaction = db.transaction(activeStore, 'readonly');
+      const done = transactionDone(transaction);
+      const indexName = activeStore === STORE_NAMES.history
+        ? INDEX_NAMES.modeGenerationClosedAt : INDEX_NAMES.modeGenerationDeletedAt;
+      try {
+        const page = await scanGenerationPageFromIndex(
+          transaction.objectStore(activeStore).index(indexName),
+          generationTimeRange(mode, generation), options, transform,
+        );
+        await done;
+        return page;
+      } catch (error) {
+        try { transaction.abort(); } catch (_) { /* The transaction may already be inactive. */ }
+        try { await done; } catch (_) { /* Preserve the transform or cursor error. */ }
+        throw error;
+      }
+    }
+
+    async function readGenerationRevision(mode, generation) {
+      const db = await database();
+      const transaction = db.transaction(METADATA_STORE_NAME, 'readonly');
+      const done = transactionDone(transaction);
+      const metadata = await requestResult(transaction.objectStore(METADATA_STORE_NAME)
+        .get(metadataKey(mode, generation)));
+      await done;
+      const revision = Number(metadata && metadata.revision);
+      return Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+    }
+
+    async function setGenerationRevision(mode, generation, revision) {
+      const normalized = Number(revision);
+      if (!Number.isSafeInteger(normalized) || normalized < 0) throw new TypeError('revision must be a non-negative integer.');
+      const db = await database();
+      const transaction = db.transaction(METADATA_STORE_NAME, 'readwrite');
+      const done = transactionDone(transaction);
+      transaction.objectStore(METADATA_STORE_NAME).put({
+        storageKey: metadataKey(mode, generation), mode, generation, revision: normalized,
+      });
+      await done;
+      return normalized;
+    }
+
+    async function scanGenerationForChanges(store, mode, generation, deleteIds) {
+      const ids = new Set((Array.isArray(deleteIds) ? deleteIds : []).map(String));
+      const ordinals = new Map();
+      let maxOrdinal = -1;
+      const request = store.index(INDEX_NAMES.modeGeneration).openCursor(generationRange(mode, generation));
+      await new Promise((resolve, reject) => {
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) { resolve(); return; }
+          const record = cursor.value || {};
+          const ordinal = Number(record.ordinal);
+          if (Number.isSafeInteger(ordinal)) maxOrdinal = Math.max(maxOrdinal, ordinal);
+          if (ids.has(String(record.eventId))) {
+            ordinals.set(String(record.eventId), Number.isSafeInteger(ordinal) ? ordinal : ++maxOrdinal);
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+        request.onerror = () => reject(request.error || new Error('IndexedDB cursor failed.'));
+      });
+      return { maxOrdinal, ordinals };
+    }
+
+    async function applyGenerationChanges(mode, generation, changes, expectedRevision, nextRevision) {
+      const activeMode = assertMode(mode);
+      const activeGeneration = normalizeGeneration(generation);
+      const expected = Number(expectedRevision);
+      const next = Number(nextRevision);
+      if (!Number.isSafeInteger(expected) || expected < 0 || !Number.isSafeInteger(next) || next < 0) {
+        throw new TypeError('revisions must be non-negative integers.');
+      }
+      const db = await database();
+      const transaction = db.transaction([...Object.values(STORE_NAMES), METADATA_STORE_NAME], 'readwrite');
+      const done = transactionDone(transaction);
+      const metadataStore = transaction.objectStore(METADATA_STORE_NAME);
+      const currentMetadata = await requestResult(metadataStore.get(metadataKey(activeMode, activeGeneration)));
+      const currentRevision = currentMetadata && Number.isSafeInteger(Number(currentMetadata.revision))
+        ? Number(currentMetadata.revision) : expected;
+      if (currentRevision !== expected) {
+        transaction.abort();
+        try { await done; } catch (_) { /* Report the stable conflict below. */ }
+        const error = new Error('IndexedDB generation revision changed.');
+        error.code = 'REVISION_CONFLICT';
+        throw error;
+      }
+      for (const storeName of Object.values(STORE_NAMES)) {
+        const store = transaction.objectStore(storeName);
+        const input = changes && changes[storeName] ? changes[storeName] : {};
+        const put = Array.isArray(input.put) ? input.put : [];
+        const idsToReplace = put.map((event) => String(event && event.id));
+        const scan = await scanGenerationForChanges(
+          store, activeMode, activeGeneration,
+          [...(Array.isArray(input.deleteIds) ? input.deleteIds : []), ...idsToReplace],
+        );
+        let nextOrdinal = scan.maxOrdinal;
+        for (const event of put) {
+          const eventId = String(event.id);
+          const ordinal = scan.ordinals.has(eventId) ? scan.ordinals.get(eventId) : ++nextOrdinal;
+          store.put(toStoredRecord(storeName, activeMode, activeGeneration, event, ordinal));
+        }
+      }
+      metadataStore.put({
+        storageKey: metadataKey(activeMode, activeGeneration),
+        mode: activeMode, generation: activeGeneration, revision: next,
+      });
+      await done;
+      return { revision: next };
     }
 
     async function countGeneration(storeName, mode, generation) {
@@ -248,9 +454,14 @@
       countGeneration,
       deleteGeneration,
       getRecordsByOrdinals,
+      applyGenerationChanges,
       putBatch,
       readGeneration,
+      readGenerationPage,
+      readGenerationRevision,
       resetGeneration,
+      scanGenerationPage,
+      setGenerationRevision,
     };
   }
 
@@ -258,9 +469,12 @@
     DATABASE_NAME,
     DATABASE_VERSION,
     INDEX_NAMES,
+    METADATA_STORE_NAME,
     STORE_NAMES,
     createIndexedDbRecordStore,
     hostnamesForEvent,
+    readGenerationPageFromIndex,
+    scanGenerationPageFromIndex,
     recordStorageKey,
     toStoredRecord,
   };

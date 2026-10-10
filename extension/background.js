@@ -342,11 +342,39 @@ async function handleMessage(message) {
     };
   }
   if (action === 'get-history' || action === 'get-trash') {
+    if (message.limit !== undefined && typeof repository.queryCollection === 'function') {
+      const pagination = normalizeListPagination(message, 1);
+      const storeName = action === 'get-history' ? 'history' : 'trash';
+      const page = await repository.queryCollection(
+        storeName, activeMode, message.query || '', pagination,
+      );
+      const statistics = {
+        revision: page.revision,
+        ...page.statistics,
+        displayedRecords: page.results.length,
+      };
+      return {
+        mode: activeMode, settings: page.settings, revision: page.revision, statistics,
+        totalEventCount: statistics.totalRecords,
+        totalTabCount: statistics.totalTabs,
+        resultEventCount: statistics.matchingRecords,
+        matchedTabCount: statistics.matchingTabs,
+        resultTabCount: statistics.resultTabs,
+        pagination: {
+          offset: pagination.offset,
+          limit: pagination.limit,
+          hasMore: pagination.offset + page.results.length < statistics.matchingRecords,
+        },
+        results: page.results,
+      };
+    }
     const context = await readPrunedContext();
     const source = action === 'get-history'
       ? context.history.slice().sort((a, b) => b.closedAt - a.closedAt)
       : context.trash.slice().sort((a, b) => b.deletedAt - a.deletedAt);
     const results = buildSearchResults(source, message.query, { deduplicateSingles: false });
+    const pagination = normalizeListPagination(message, results.length);
+    const displayedResults = results.slice(pagination.offset, pagination.offset + pagination.limit);
     const totalTabCount = countTabs(source);
     const matchedTabCount = results.reduce((sum, item) => sum + item.matchedTabCount, 0);
     const resultTabCount = results.reduce((sum, item) => sum + item.totalTabCount, 0);
@@ -357,7 +385,7 @@ async function handleMessage(message) {
       matchingRecords: results.length,
       matchingTabs: matchedTabCount,
       resultTabs: resultTabCount,
-      displayedRecords: results.length,
+      displayedRecords: displayedResults.length,
     };
     return {
       mode: activeMode, settings: context.settings, revision: context.revision, statistics,
@@ -366,7 +394,12 @@ async function handleMessage(message) {
       resultEventCount: statistics.matchingRecords,
       matchedTabCount: statistics.matchingTabs,
       resultTabCount: statistics.resultTabs,
-      results,
+      pagination: {
+        offset: pagination.offset,
+        limit: pagination.limit,
+        hasMore: pagination.offset + displayedResults.length < results.length,
+      },
+      results: displayedResults,
     };
   }
   if (action === 'prepare-destructive-action') {
@@ -457,6 +490,20 @@ async function handleMessage(message) {
   if (action === 'reopen-tab') return reopenTab(message.eventId, message.tabId);
   if (action === 'open-dashboard') return openDashboard(message);
   throw protocolError('UNKNOWN_MESSAGE', `Unsupported message type: ${String(action || '')}`);
+}
+
+function normalizeListPagination(message, resultCount) {
+  const source = message && typeof message === 'object' ? message : {};
+  const offset = source.offset === undefined ? 0 : Number(source.offset);
+  const fallbackLimit = Math.max(1, Number(resultCount) || 0);
+  const limit = source.limit === undefined ? fallbackLimit : Number(source.limit);
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw protocolError('INVALID_REQUEST', 'offset must be a non-negative integer.');
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw protocolError('INVALID_REQUEST', 'limit must be an integer between 1 and 500.');
+  }
+  return { offset, limit };
 }
 
 async function getStorageHealth() {

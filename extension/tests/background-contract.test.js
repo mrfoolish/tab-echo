@@ -338,6 +338,26 @@ test('history reads lazily prune history and trash together and return search co
   assert.deepEqual(subject.local.values[keys.normalTrash], []);
 });
 
+test('history list protocol returns only the requested page with full matching statistics', async () => {
+  const closedAt = Date.now();
+  const subject = await loadBackground({ localInitial: {
+    [keys.normalHistory]: [
+      entry('oldest', 'normal', undefined, { closedAt: closedAt - 2 }),
+      entry('middle', 'normal', undefined, { closedAt: closedAt - 1 }),
+      entry('newest', 'normal', undefined, { closedAt }),
+    ],
+  } });
+
+  const result = await subject.message({ type: 'get-history', offset: 1, limit: 1 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.results.map((item) => item.event.id), ['middle']);
+  assert.equal(result.statistics.totalRecords, 3);
+  assert.equal(result.statistics.matchingRecords, 3);
+  assert.equal(result.statistics.displayedRecords, 1);
+  assert.deepEqual(structuredClone(result.pagination), { offset: 1, limit: 1, hasMore: true });
+});
+
 test('reopen-tab uses the current window while reopen-event opens a group in a new window in source order', async () => {
   const group = entry('group', 'normal', [
     { id: 'first', title: 'First', url: 'https://first.example/' },

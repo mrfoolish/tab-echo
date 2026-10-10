@@ -100,7 +100,7 @@ h1 { font-size: 19px; font-weight: 720; line-height: 1.1; letter-spacing: -.035e
 .event-title, .tab-title, .tab-address { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-title { min-width: 0; flex: 1; margin-bottom: 2px; font-size: 11.5px; }
 .event-time { position: relative; flex: 0 0 auto; color: var(--muted); font-size: 9.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.event-time:focus::after { position: fixed; z-index: 100; right: 12px; top: 132px; max-width: 360px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--panel); background: var(--ink); box-shadow: var(--shadow); content: attr(data-full-time); font-size: 10.5px; font-weight: 600; white-space: normal; }
+.event-time:is(:hover, :focus)::after { position: fixed; z-index: 100; right: 12px; top: 132px; max-width: 360px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--panel); background: var(--ink); box-shadow: var(--shadow); content: attr(data-full-time); font-size: 10.5px; font-weight: 600; white-space: normal; }
 .event-details { min-width: 0; }
 .tab-line { min-width: 0; gap: 5px; }
 .tab-copy { min-width: 0; flex: 1; }

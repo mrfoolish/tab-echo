@@ -147,6 +147,7 @@ test('URL state accepts only known views and normalizes pagination', () => {
   });
   assert.equal(helpers.buildUrlState({ view: 'settings', query: '', page: 1, pageSize: 50 }), '?view=settings');
   assert.equal(helpers.buildUrlState({ view: 'history', query: 'a b', page: 2, pageSize: 25 }), '?view=history&q=a+b&page=2&pageSize=25');
+  assert.doesNotMatch(js, /state\.pageSize\s*=\s*Number\(settings\.pageSize\)/);
 });
 
 test('pagination slices result events and clamps stale pages', () => {
@@ -193,7 +194,8 @@ test('runtime uses background result counts, complete-event bulk operations, and
   assert.match(js, /type:\s*'move-to-trash'/);
   assert.match(js, /eventIds:\s*selection\.eventIds/);
   assert.match(js, /type:\s*'move-to-trash',\s*all:\s*true/);
-  assert.doesNotMatch(js, /type:\s*'move-to-trash',\s*all:\s*true,\s*query/);
+  assert.match(js, /type:\s*'move-to-trash',\s*all:\s*true,\s*query/);
+  assert.match(js, /type:\s*'get-history',\s*query:\s*requestedQuery,\s*offset:\s*requestOffset,\s*limit:\s*requestLimit/);
   assert.match(js, /settingsRequestToken/);
   assert.match(js, /data\.token/);
   assert.match(js, /popstate/);
@@ -288,7 +290,7 @@ test('typing invalidates an in-flight history request before debounce starts ano
   assert.equal(helpers.isLoadedResultCurrent({ loading: true, query: 'new', loadedQuery: 'old' }), false);
   assert.equal(helpers.isLoadedResultCurrent({ loading: false, query: 'new', loadedQuery: 'new' }), true);
   assert.ok(js.includes("if (!currentResource('history')) return;"));
-  assert.ok(js.includes("if (!currentResource('trash')) return;"));
+  assert.ok(js.includes("if (!currentResource('trash')"));
 });
 
 test('searched groups default open but an explicit toggle can close them', () => {
@@ -348,7 +350,7 @@ test('relative times refresh only for a visible history or Trash view', () => {
   assert.match(js, /closedTimePrefix/);
   assert.match(js, /trashedTimePrefix/);
   assert.match(js, /node\.tabIndex = 0/);
-  assert.match(css, /\.event-time:focus::after/);
+  assert.match(css, /\.event-time:is\(:hover, :focus\)::after/);
 });
 
 test('settings are grouped without repeating the save-impact scope notice by default', () => {
@@ -377,7 +379,7 @@ test('settings controls expose linked help and errors through native form semant
     assert.match(html, new RegExp(`for="${name}Input"[^>]*>[\\s\\S]*id="${name}Input"[^>]*aria-describedby="[^"]*${name}Error`));
   }
   assert.match(html, /id="excludedDomainsInput"[^>]*spellcheck="false"[^>]*aria-describedby="excludedDomainsHelp excludedDomainsError"/);
-  assert.match(html, /id="excludedDomainsError"[^>]*role="alert"/);
+  assert.match(html, /id="excludedDomainsError"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(js, /setCustomValidity\(localizedMessage\)/);
   assert.match(js, /setCustomValidity\(''\)/);
   assert.match(js, /setAttribute\('aria-live', isError \? 'assertive' : 'polite'\)/);
@@ -412,8 +414,9 @@ test('dashboard is responsive and honors theme, focus, and reduced-motion prefer
 test('dashboard list summaries and tab details stay on one compact line', () => {
   assert.match(css, /\.event-summary, \.tab-copy \{[^}]*display:\s*flex[^}]*white-space:\s*nowrap/s);
   assert.match(css, /\.event-summary span, \.tab-copy span \{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s);
-  assert.match(css, /\.event-summary span::before, \.tab-copy span::before/);
-  assert.match(js, /if \(isGroup && expanded\)/);
+  assert.doesNotMatch(css, /\.event-summary span::before, \.tab-copy span::before/);
+  assert.match(js, /if \(isGroup\) \{/);
+  assert.match(js, /setAttribute\('aria-controls', `history-tabs-/);
   assert.match(js, /appendHighlightedText\(doc, title, tab.title \|\| tab.url, ranges.title\)/);
   assert.match(js, /card.className = `event-card \${isGroup \? `is-group \${expanded \? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`/);
   assert.match(js, /else \{ toggle = null; \}/);
@@ -505,8 +508,9 @@ test('browser VM guards stale Trash actions, restores explicit ids, and Empty Tr
         results: [{ event: { id: 'old', deletedAt: 1, tabs: [{ id: 'a', title: 'needle', url: 'https://a.example' }] }, totalTabCount: 1, matchedTabCount: 1, matchRanges: {} },
           { event: { id: 'new', deletedAt: 2, tabs: [{ id: 'b', title: 'needle', url: 'https://b.example' }] }, totalTabCount: 1, matchedTabCount: 1, matchRanges: {} }],
         totalEventCount: 2, totalTabCount: 2, resultEventCount: 2, matchedTabCount: 2 };
-      if (message.type === 'restore-trash' && blockRestore) return { ok: false, requiredSlots: 2, error: { code: 'INSUFFICIENT_CAPACITY', message: 'capacity' } };
-      if (message.type === 'restore-trash') return { ok: true, restored: 2 };
+      if (message.type === 'restore-trash-results' && blockRestore) return { ok: false, requiredSlots: 2, error: { code: 'INSUFFICIENT_CAPACITY', message: 'capacity' } };
+      if (message.type === 'restore-trash-results') return { ok: true, restored: 2 };
+      if (message.type === 'restore-trash') return { ok: true, restored: 1 };
       if (message.type === 'prepare-destructive-action') return { ok: true, token: 'trash-token', eventCount: 2, tabCount: 2 };
       if (message.type === 'commit-destructive-action') return { ok: true, deleted: 2 };
       if (message.type === 'get-history' && failHistory) return { ok: false, error: { code: 'FAILED', message: 'refresh failed' } };
@@ -528,7 +532,7 @@ test('browser VM guards stale Trash actions, restores explicit ids, and Empty Tr
   assert.equal(confirmations.length, 0);
   confirmations.length = 0;
   await listeners['restoreTrashResultsButton:click'](); await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(messages.find((message) => message.type === 'restore-trash'), { type: 'restore-trash', trashIds: ['new', 'old'] });
+  assert.deepEqual(messages.find((message) => message.type === 'restore-trash-results'), { type: 'restore-trash-results', query: 'needle' });
   assert.match(node('statusMessage').textContent, /2 more slot/);
   assert.equal(nodes.get('trashView').hidden, false);
   blockRestore = false; failHistory = true; await listeners['restoreTrashResultsButton:click'](); await new Promise((resolve) => setImmediate(resolve));
@@ -691,7 +695,7 @@ test('dashboard declares complete trash and settings controls with permanent-ret
 
 test('runtime uses explicit loaded trash ids, single permanent deletion, and an independent settings read', () => {
   assert.match(js, /type:\s*'get-trash',\s*query:\s*requestedQuery/);
-  assert.match(js, /type:\s*'restore-trash',\s*trashIds:\s*selection\.eventIds/);
+  assert.match(js, /type:\s*'restore-trash-results',\s*query:\s*state\.query/);
   assert.match(js, /type:\s*'restore-trash',\s*trashIds:\s*\[eventId\]/);
   assert.match(js, /type:\s*'permanently-delete-trash',\s*trashIds:\s*\[eventId\]/);
   assert.match(js, /operation:\s*'empty-trash'/);

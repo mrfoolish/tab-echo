@@ -88,6 +88,14 @@ test('popup is a compact quick-entry surface without paging, embedded settings, 
   assert.match(css, /\.event-time\s*\{[^}]*white-space:\s*nowrap/s);
 });
 
+test('Popup exposes search, list, and remove disclosure semantics without menu claims', () => {
+  assert.match(html, /<search class="search-row">/);
+  assert.match(html, /id="historyList"[^>]*role="list"/);
+  assert.match(html, /id="bulkRemoveButton"[^>]*aria-controls="bulkRemoveMenu"/);
+  assert.doesNotMatch(html, /id="bulkRemoveButton"[^>]*aria-haspopup/);
+  assert.match(html, /id="bulkRemovePanel"[^>]*role="region"[^>]*aria-live="polite"/);
+});
+
 test('Popup focuses the search field as soon as it opens', () => {
   const app = createVm(async () => ({ ok: true, mode: 'normal', settings: { language: 'en' }, results: [], resultEventCount: 0 }));
 
@@ -174,8 +182,9 @@ test('Popup renders compact relative close times for single and grouped events w
   for (const time of times) {
     assert.equal(time.className, 'event-time');
     assert.equal(time.textContent, '5 minutes ago');
-    assert.equal(time.title, timeFormat.formatFullTime(closedAt, 'en'));
-    assert.equal(time['aria-label'], time.title);
+    assert.equal(time.title, '');
+    assert.equal(time.dataset.fullTime, timeFormat.formatFullTime(closedAt, 'en'));
+    assert.equal(time['aria-label'], time.dataset.fullTime);
     assert.equal(time.datetime, new Date(closedAt).toISOString());
   }
 });
@@ -267,6 +276,8 @@ test('popup uses the query protocol, caps event results, and exposes counted das
   assert.match(js, /type:\s*'get-history'/);
   assert.match(js, /type:\s*'get-trash'/);
   assert.match(js, /slice\(0,\s*popupSize\(\)\)/);
+  assert.match(js, /type:\s*'get-history',\s*query:\s*requestedQuery,\s*offset:\s*0,\s*limit:\s*popupSize\(\)/);
+  assert.match(js, /type:\s*'get-trash',\s*query:\s*'',\s*offset:\s*0,\s*limit:\s*1/);
   assert.match(js, /MAX_POPUP_SIZE = 200/);
   assert.match(js, /resultEventCount/);
   assert.match(js, /type:\s*'open-dashboard',\s*view:\s*'history',\s*q:/);

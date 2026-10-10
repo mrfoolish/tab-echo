@@ -68,6 +68,18 @@
       return JSON.stringify(left) === JSON.stringify(right);
     }
 
+    function collectionChanges(current, next) {
+      const before = new Map(current.map((event) => [String(event.id), event]));
+      const after = new Map(next.map((event) => [String(event.id), event]));
+      const deleteIds = [];
+      const put = [];
+      for (const id of before.keys()) if (!after.has(id)) deleteIds.push(id);
+      for (const [id, event] of after) {
+        if (!before.has(id) || !equivalent(before.get(id), event)) put.push(event);
+      }
+      return { deleteIds, put };
+    }
+
     function createIndexedDbStorageRepository(storageArea, recordStore, options = {}) {
       const legacyRepository = options.legacyRepository || createStorageRepository(storageArea, options);
       const migration = options.migration || createIndexedDbMigration({
@@ -108,11 +120,18 @@
         const marker = readValue(result, INDEXEDDB_KEYS.marker[mode]);
         const indexed = typeof generation === 'string' && generation
           && marker && marker.status === 'complete';
+        let revision = normalizeRevision(readValue(result, STORAGE_KEYS.revision[mode]));
+        if (indexed && typeof recordStore.readGenerationRevision === 'function') {
+          const indexedRevision = await recordStore.readGenerationRevision(mode, generation);
+          if (indexedRevision !== null && indexedRevision !== undefined) {
+            revision = normalizeRevision(indexedRevision);
+          }
+        }
         return {
           indexed: Boolean(indexed),
           generation: indexed ? generation : null,
           settings: historyStore.normalizeSettings(readValue(result, STORAGE_KEYS.settings)),
-          revision: normalizeRevision(readValue(result, STORAGE_KEYS.revision[mode])),
+          revision,
           settingsRevision: normalizeRevision(readValue(result, STORAGE_KEYS.settingsRevision)),
         };
       }
@@ -146,6 +165,54 @@
           ? normalizeHistory(records, activeMode) : normalizeTrash(records, activeMode);
       }
 
+      async function queryCollection(storeName, mode, query, options = {}) {
+        const activeMode = assertMode(mode);
+        const metadata = await readMetadata(activeMode);
+        const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
+        const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
+        if (!metadata.indexed || typeof recordStore.scanGenerationPage !== 'function') {
+          const stored = metadata.indexed
+            ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
+            : (storeName === 'history'
+              ? await legacyRepository.readHistory(activeMode) : await legacyRepository.readTrash(activeMode));
+          const source = stored
+            .slice().sort(storeName === 'history'
+              ? (left, right) => right.closedAt - left.closedAt
+              : (left, right) => right.deletedAt - left.deletedAt);
+          const results = historyStore.buildSearchResults(source, query, { deduplicateSingles: false });
+          const totalTabs = historyStore.countTabs(source);
+          return {
+            settings: metadata.settings, revision: metadata.revision,
+            results: results.slice(offset, offset + limit),
+            statistics: {
+              totalRecords: source.length,
+              totalTabs,
+              matchingRecords: results.length,
+              matchingTabs: results.reduce((sum, item) => sum + item.matchedTabCount, 0),
+              resultTabs: results.reduce((sum, item) => sum + item.totalTabCount, 0),
+            },
+          };
+        }
+        const page = await recordStore.scanGenerationPage(
+          storeName, activeMode, metadata.generation, { offset, limit },
+          (candidate) => {
+            const normalized = storeName === 'history'
+              ? normalizeHistory([candidate], activeMode)[0]
+              : normalizeTrash([candidate], activeMode)[0];
+            if (!normalized) return null;
+            return historyStore.buildSearchResults(
+              [normalized], query, { deduplicateSingles: false },
+            )[0] || null;
+          },
+        );
+        return {
+          settings: metadata.settings,
+          revision: metadata.revision,
+          results: page.records,
+          statistics: page.statistics,
+        };
+      }
+
       async function writeBatches(storeName, mode, generation, records) {
         let deadline = performanceNow() + timeBudgetMs;
         for (let offset = 0; offset < records.length; offset += batchSize) {
@@ -158,7 +225,7 @@
         }
       }
 
-      async function stageGeneration(mode, generation, history, trash) {
+      async function stageGeneration(mode, generation, history, trash, revision) {
         await recordStore.resetGeneration(mode, generation);
         await writeBatches('history', mode, generation, history);
         await writeBatches('trash', mode, generation, trash);
@@ -168,6 +235,9 @@
         ]);
         if (historyCount !== history.length || trashCount !== trash.length) {
           throw new Error('IndexedDB generation verification failed.');
+        }
+        if (typeof recordStore.setGenerationRevision === 'function') {
+          await recordStore.setGenerationRevision(mode, generation, revision);
         }
       }
 
@@ -212,12 +282,24 @@
         const settingsChanged = includeSettings && !equivalent(settings, current.settings);
         const revision = current.revision + (includeSettings ? (contextChanged ? 1 : 0) : 1);
         const settingsRevision = current.settingsRevision + (settingsChanged ? 1 : 0);
-        const generation = nextGeneration(mode, revision);
         const result = clone(Object.hasOwn(mutation, 'result') ? mutation.result
           : { settings, history, trash, revision, settingsRevision });
         const oldMetadata = await readMetadata(mode);
 
-        await stageGeneration(mode, generation, history, trash);
+        if (!includeSettings && oldMetadata.indexed
+          && typeof recordStore.applyGenerationChanges === 'function') {
+          const changes = {
+            history: collectionChanges(current.history, history),
+            trash: collectionChanges(current.trash, trash),
+          };
+          await recordStore.applyGenerationChanges(
+            mode, oldMetadata.generation, changes, current.revision, revision,
+          );
+          return result;
+        }
+
+        const generation = nextGeneration(mode, revision);
+        await stageGeneration(mode, generation, history, trash, revision);
         const payload = {
           [INDEXEDDB_KEYS.generation[mode]]: generation,
           [STORAGE_KEYS.revision[mode]]: revision,
@@ -261,6 +343,7 @@
         readContext,
         readHistory: (mode) => readCollection('history', mode),
         readTrash: (mode) => readCollection('trash', mode),
+        queryCollection,
         saveSettings: (...args) => legacyRepository.saveSettings(...args),
         updateContext: (mode, mutator) => enqueue(mode, () => performUpdate(mode, mutator, false)),
         updateSettingsAndContext: (mode, mutator) => enqueue(mode,

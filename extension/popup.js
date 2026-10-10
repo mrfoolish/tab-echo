@@ -163,8 +163,8 @@
     setBusy(true);
     const requestedQuery = state.query;
     const [historyResult, trashResult] = await Promise.allSettled([
-      sendMessage({ type: 'get-history', query: requestedQuery }),
-      sendMessage({ type: 'get-trash', query: '' }),
+      sendMessage({ type: 'get-history', query: requestedQuery, offset: 0, limit: popupSize() }),
+      sendMessage({ type: 'get-trash', query: '', offset: 0, limit: 1 }),
     ]);
     if (token !== state.requestToken) return;
     if (historyResult.status === 'fulfilled') {
@@ -233,7 +233,7 @@
   function renderEvent(result) {
     const closeEvent = result.event || {};
     const tabs = state.query.trim() ? (result.matchedTabs || []) : (closeEvent.tabs || []);
-    const row = root.document.createElement('article'); row.className = 'event-row';
+    const row = root.document.createElement('article'); row.className = 'event-row'; row.setAttribute('role', 'listitem');
     const copy = root.document.createElement('div'); copy.className = 'event-copy';
     const heading = root.document.createElement('div'); heading.className = 'event-heading';
     const title = root.document.createElement('strong'); title.className = 'event-title';
@@ -264,7 +264,6 @@
     const time = root.document.createElement('time'); time.className = 'event-time';
     time.textContent = root.TabEchoTimeFormat.formatRelativeTime(closedAt, language);
     time.setAttribute('datetime', new Date(Number(closedAt)).toISOString()); time.tabIndex = 0; time.dataset.fullTime = fullTime;
-    time.title = fullTime;
     time.setAttribute('aria-label', fullTime);
     return time;
   }
@@ -316,7 +315,7 @@
   }
 
   function renderEmpty() {
-    const empty = root.document.createElement('div'); empty.className = 'empty-state';
+    const empty = root.document.createElement('div'); empty.className = 'empty-state'; empty.setAttribute('role', 'listitem');
     const title = root.document.createElement('strong'); title.textContent = t(state.query ? 'noMatchTitle' : 'emptyTitle');
     const body = root.document.createElement('span'); body.textContent = t(state.query ? 'noMatchBody' : 'emptyBody');
     empty.append(title, body); return empty;

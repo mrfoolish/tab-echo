@@ -40,9 +40,13 @@ function memoryStorage(initial = {}) {
 
 function memoryRecordStore() {
   const values = { history: new Map(), trash: new Map() };
+  const mutations = [];
+  const revisions = new Map();
+  let failMutation = false;
   const key = (mode, generation) => `${mode}:${generation}`;
   return {
-    values,
+    values, mutations, revisions,
+    set failMutation(value) { failMutation = value; },
     async resetGeneration(mode, generation) {
       values.history.set(key(mode, generation), []);
       values.trash.set(key(mode, generation), []);
@@ -62,9 +66,50 @@ function memoryRecordStore() {
     async readGeneration(storeName, mode, generation) {
       return structuredClone(values[storeName].get(key(mode, generation)) || []);
     },
+    async scanGenerationPage(storeName, mode, generation, options, transform) {
+      const bucket = structuredClone(values[storeName].get(key(mode, generation)) || [])
+        .sort(storeName === 'history'
+          ? (left, right) => right.closedAt - left.closedAt
+          : (left, right) => right.deletedAt - left.deletedAt);
+      const matches = bucket.map(transform).filter(Boolean);
+      return {
+        records: matches.slice(options.offset, options.offset + options.limit),
+        statistics: {
+          totalRecords: bucket.length,
+          totalTabs: bucket.reduce((sum, item) => sum + item.tabs.length, 0),
+          matchingRecords: matches.length,
+          matchingTabs: matches.reduce((sum, item) => sum + item.matchedTabCount, 0),
+          resultTabs: matches.reduce((sum, item) => sum + item.totalTabCount, 0),
+        },
+      };
+    },
     async deleteGeneration(mode, generation) {
       values.history.delete(key(mode, generation));
       values.trash.delete(key(mode, generation));
+      revisions.delete(key(mode, generation));
+    },
+    async readGenerationRevision(mode, generation) {
+      return revisions.has(key(mode, generation)) ? revisions.get(key(mode, generation)) : null;
+    },
+    async setGenerationRevision(mode, generation, revision) {
+      revisions.set(key(mode, generation), revision);
+    },
+    async applyGenerationChanges(mode, generation, changes, expectedRevision, nextRevision) {
+      if (failMutation) throw new Error('mutation failed');
+      mutations.push(structuredClone({ mode, generation, changes, expectedRevision, nextRevision }));
+      for (const storeName of ['history', 'trash']) {
+        const bucket = values[storeName].get(key(mode, generation)) || [];
+        const deleted = new Set(changes[storeName].deleteIds.map(String));
+        const retained = bucket.filter((item) => !deleted.has(String(item.id)));
+        const replacements = new Map(changes[storeName].put.map((item) => [String(item.id), structuredClone(item)]));
+        const updated = retained.map((item) => replacements.has(String(item.id))
+          ? replacements.get(String(item.id)) : item);
+        const present = new Set(updated.map((item) => String(item.id)));
+        for (const item of replacements.values()) if (!present.has(String(item.id))) updated.push(item);
+        values[storeName].set(key(mode, generation), updated);
+      }
+      revisions.set(key(mode, generation), nextRevision);
+      return { revision: nextRevision };
     },
   };
 }
@@ -88,7 +133,7 @@ test('migrated repository reads IndexedDB generations after removing local array
   assert.equal(storage.values[STORAGE_KEYS.history.normal], undefined);
 });
 
-test('updates stage a new generation before atomically switching metadata', async () => {
+test('ordinary updates mutate the active generation without rewriting unchanged collections', async () => {
   const storage = memoryStorage({ [STORAGE_KEYS.history.normal]: [event('one')] });
   const records = memoryRecordStore();
   const repository = createIndexedDbStorageRepository(storage, records, { now: () => 500 });
@@ -102,22 +147,28 @@ test('updates stage a new generation before atomically switching metadata', asyn
   }));
 
   assert.deepEqual(result, { added: 1 });
-  assert.notEqual(storage.values[KEYS.generation.normal], previousGeneration);
+  assert.equal(storage.values[KEYS.generation.normal], previousGeneration);
   assert.deepEqual((await repository.readHistory('normal')).map((item) => item.id), ['one', 'two']);
-  assert.equal(records.values.history.has(`normal:${previousGeneration}`), false);
+  assert.equal(records.mutations.length, 1);
+  assert.deepEqual(records.mutations[0].changes.history.deleteIds, []);
+  assert.deepEqual(records.mutations[0].changes.history.put.map((item) => item.id), ['two']);
+  assert.deepEqual(records.mutations[0].changes.trash, { deleteIds: [], put: [] });
+  assert.equal(records.mutations[0].expectedRevision, 0);
+  assert.equal(records.mutations[0].nextRevision, 1);
+  assert.equal(storage.values[STORAGE_KEYS.revision.normal], undefined);
 });
 
-test('failed metadata switch leaves the previous generation authoritative', async () => {
+test('failed incremental transaction leaves the previous generation authoritative', async () => {
   const storage = memoryStorage({ [STORAGE_KEYS.history.normal]: [event('one')] });
   const records = memoryRecordStore();
   const repository = createIndexedDbStorageRepository(storage, records, { retryLimit: 0 });
   await repository.migrateLegacyState('normal');
   const previousGeneration = storage.values[KEYS.generation.normal];
-  storage.failMetadata = true;
+  records.failMutation = true;
 
   await assert.rejects(repository.updateContext('normal', (context) => ({
     history: context.history.concat(event('two')), trash: context.trash,
-  })), (error) => error.name === 'StorageWriteError');
+  })), /mutation failed/);
 
   assert.equal(storage.values[KEYS.generation.normal], previousGeneration);
   assert.deepEqual((await repository.readHistory('normal')).map((item) => item.id), ['one']);
@@ -142,4 +193,22 @@ test('settings and cleaned records become visible through one metadata write', a
   assert.deepEqual(context.history.map((item) => item.id), ['two']);
   assert.equal(context.revision, 1);
   assert.equal(context.settingsRevision, 1);
+});
+
+test('indexed queries scan statistics but retain only the requested result page', async () => {
+  const storage = memoryStorage({
+    [STORAGE_KEYS.history.normal]: [
+      event('old', { closedAt: 1 }), event('middle', { closedAt: 2 }), event('new', { closedAt: 3 }),
+    ],
+  });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records);
+  await repository.migrateLegacyState('normal');
+
+  const page = await repository.queryCollection('history', 'normal', '', { offset: 1, limit: 1 });
+
+  assert.deepEqual(page.results.map((item) => item.event.id), ['middle']);
+  assert.equal(page.statistics.totalRecords, 3);
+  assert.equal(page.statistics.matchingRecords, 3);
+  assert.equal(page.statistics.totalTabs, 3);
 });

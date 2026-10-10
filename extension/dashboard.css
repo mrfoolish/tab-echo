@@ -45,6 +45,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .nav-list button[aria-current="page"] { border-color: color-mix(in srgb, var(--accent) 18%, var(--line)); color: var(--accent-hover); background: var(--accent-soft); font-weight: 680; }
 .workspace { min-width: 0; padding: 30px clamp(26px, 4.5vw, 72px) 56px; }
 .topbar { display: flex; min-height: 46px; align-items: center; gap: 14px; margin: 0 auto 22px; max-width: 1160px; }
+.topbar search { display: flex; flex: 1 1 auto; align-items: center; gap: 14px; }
 .search-field { position: relative; display: block; width: min(620px, 100%); }
 .search-field input { width: 100%; height: 46px; padding: 0 46px 0 42px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); background: var(--surface); transition: border-color 160ms ease, box-shadow 160ms ease; }
 .search-field input::placeholder { color: var(--muted); }
@@ -89,7 +90,7 @@ h1 { margin: 0 0 5px; font-size: clamp(27px, 3vw, 34px); font-weight: 720; line-
 .domain-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .domain-count { min-width: 24px; color: inherit; font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .event-time { position: relative; flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.event-time:focus::after { position: absolute; z-index: 30; right: 0; top: calc(100% + 7px); width: max-content; max-width: 320px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--surface); background: var(--ink); box-shadow: var(--shadow); content: attr(data-full-time); font-size: 11px; font-weight: 600; white-space: normal; }
+.event-time:is(:hover, :focus)::after { position: absolute; z-index: 30; right: 0; top: calc(100% + 7px); width: max-content; max-width: 320px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--surface); background: var(--ink); box-shadow: var(--shadow); content: attr(data-full-time); font-size: 11px; font-weight: 600; white-space: normal; }
 .event-card { overflow: visible; background: var(--surface); transition: background 160ms ease; }
 .event-card + .event-card { border-top: 1px solid var(--line); }
 .event-card:hover { background: var(--surface-raised); }
@@ -104,9 +105,7 @@ h1 { margin: 0 0 5px; font-size: clamp(27px, 3vw, 34px); font-weight: 720; line-
 .event-summary .event-details-inline { display: flex; min-width: 0; max-width: 62%; flex: 0 1 62%; align-items: baseline; gap: 8px; }
 .event-summary .event-address { min-width: 0; max-width: none; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-summary .event-time { max-width: none; flex: 0 0 auto; overflow: visible; }
-.event-details-inline .event-time::before { margin-right: 8px; color: var(--line-strong); content: "·"; }
 #trashView .event-summary > span:last-child { max-width: 55%; flex-basis: 55%; }
-.event-summary span::before, .tab-copy span::before { margin-right: 8px; color: var(--line-strong); content: "·"; }
 .group-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
 .group-summary .group-identity { display: flex; min-width: 0; max-width: none; flex: 1 1 auto; align-items: center; gap: 9px; color: var(--ink); font-size: 14px; }
 .group-summary .group-identity::before, .group-summary .group-badge::before { content: none; }

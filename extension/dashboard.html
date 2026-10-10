@@ -21,14 +21,14 @@
       </aside>
 
       <main class="workspace">
-        <header class="topbar">
+        <header class="topbar"><search>
           <label class="search-field" for="searchInput">
             <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4 4"/></svg>
             <span class="visually-hidden" data-i18n="searchLabel">Search closed tabs</span>
             <input id="searchInput" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search titles or URLs" data-i18n-placeholder="searchPlaceholder">
             <kbd aria-hidden="true">/</kbd>
           </label>
-          <button id="retryButton" class="secondary-button" type="button" hidden>Retry</button>
+          <button id="retryButton" class="secondary-button" type="button" hidden>Retry</button></search>
         </header>
 
         <p id="migrationNotice" class="migration-notice" role="status" aria-live="polite" hidden></p>
@@ -47,16 +47,16 @@
               <button id="removeHistoryButton" class="secondary-button danger-text-button" type="button" disabled>Remove all</button>
             </div>
           </div>
-          <div id="historyRemovePanel" class="destructive-confirmation" role="alert" hidden>
+          <div id="historyRemovePanel" class="destructive-confirmation" role="region" aria-live="polite" aria-labelledby="historyRemoveMessage" hidden>
             <p id="historyRemoveMessage"></p>
             <div class="confirmation-actions"><button id="confirmHistoryRemoveButton" class="danger-button" type="button">Confirm removal</button><button id="cancelHistoryRemoveButton" class="secondary-button" type="button">Cancel</button></div>
           </div>
-          <section id="historyList" class="history-list" aria-label="Closed tabs" aria-busy="true">
+          <section id="historyList" class="history-list" role="list" aria-label="Closed tabs" aria-busy="true">
             <div class="loading-state"><span></span><span></span><span></span></div>
           </section>
           <section id="domainHistoryView" class="domain-history-layout" aria-label="Closed tabs by domain" hidden>
             <nav id="domainIndex" class="domain-index" aria-label="Domains"><div class="domain-index-list"></div></nav>
-            <section id="domainHistoryList" class="history-list" aria-label="Selected domain closed tabs"></section>
+            <section id="domainHistoryList" class="history-list" role="list" aria-label="Selected domain closed tabs"></section>
           </section>
           <footer id="pagination" class="pager" aria-label="History pagination">
             <label><span data-i18n="perPage">Per page</span>
@@ -76,11 +76,11 @@
               <button id="emptyTrashButton" class="secondary-button" type="button" disabled data-i18n="emptyTrash">Empty Trash</button>
             </div>
           </div>
-          <div id="trashEmptyPanel" class="destructive-confirmation" role="alert" hidden>
+          <div id="trashEmptyPanel" class="destructive-confirmation" role="region" aria-live="polite" aria-labelledby="trashEmptyMessage" hidden>
             <p id="trashEmptyMessage"></p>
             <div class="confirmation-actions"><button id="confirmEmptyTrashButton" class="danger-button" type="button">Confirm emptying</button><button id="cancelEmptyTrashButton" class="secondary-button" type="button">Cancel</button></div>
           </div>
-          <section id="trashList" class="history-list" aria-label="Trash" aria-busy="true" tabindex="-1"><div class="loading-state"><span></span><span></span><span></span></div></section>
+          <section id="trashList" class="history-list" role="list" aria-label="Trash" aria-busy="true" tabindex="-1"><div class="loading-state"><span></span><span></span><span></span></div></section>
           <footer id="trashPagination" class="pager" aria-label="Trash pagination">
             <label><span data-i18n="perPage">Per page</span><select id="trashPageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
             <span id="trashPageSummary" aria-live="polite">Page 1 of 1</span>
@@ -94,13 +94,13 @@
           <form id="settingsForm" class="settings-form" aria-busy="true">
             <h2 data-i18n="retentionSection">Storage and cleanup</h2>
             <div class="settings-section settings-retention">
-            <label for="maxRecordsInput"><span data-i18n="maxRecords">Maximum records</span><input id="maxRecordsInput" name="maxRecords" type="text" inputmode="numeric" autocomplete="off" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="alert"></small></label>
-            <label for="maxAgeDaysInput"><span data-i18n="maxAgeDays">History retention (days)</span><input id="maxAgeDaysInput" name="maxAgeDays" type="text" inputmode="numeric" autocomplete="off" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="alert"></small></label>
-            <label for="trashMaxAgeDaysInput"><span data-i18n="trashMaxAgeDays">Trash retention (days)</span><input id="trashMaxAgeDaysInput" name="trashMaxAgeDays" type="text" inputmode="numeric" autocomplete="off" placeholder="3" aria-describedby="trashAgeHelp trashMaxAgeDaysError"><small id="trashAgeHelp" data-i18n="trashAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="trashMaxAgeDaysError" class="field-error" role="alert"></small></label>
+            <label for="maxRecordsInput"><span data-i18n="maxRecords">Maximum records</span><input id="maxRecordsInput" name="maxRecords" type="text" inputmode="numeric" autocomplete="off" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="status" aria-live="polite"></small></label>
+            <label for="maxAgeDaysInput"><span data-i18n="maxAgeDays">History retention (days)</span><input id="maxAgeDaysInput" name="maxAgeDays" type="text" inputmode="numeric" autocomplete="off" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="status" aria-live="polite"></small></label>
+            <label for="trashMaxAgeDaysInput"><span data-i18n="trashMaxAgeDays">Trash retention (days)</span><input id="trashMaxAgeDaysInput" name="trashMaxAgeDays" type="text" inputmode="numeric" autocomplete="off" placeholder="3" aria-describedby="trashAgeHelp trashMaxAgeDaysError"><small id="trashAgeHelp" data-i18n="trashAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="trashMaxAgeDaysError" class="field-error" role="status" aria-live="polite"></small></label>
             </div>
             <h2 data-i18n="displaySection">Toolbar popup</h2>
             <div class="settings-section">
-            <label for="popupSizeInput"><span data-i18n="popupSize">Maximum records shown</span><input id="popupSizeInput" name="popupSize" type="text" inputmode="numeric" autocomplete="off" placeholder="10" aria-describedby="popupSizeHelp popupSizeError"><small id="popupSizeHelp" data-i18n="popupSizeHelp">The maximum number of closed-tab entries shown when you open Tab Echo from the browser toolbar. Choose from 1 to 200. This does not affect the full list or how many records are saved.</small><small id="popupSizeError" class="field-error" role="alert"></small></label>
+            <label for="popupSizeInput"><span data-i18n="popupSize">Maximum records shown</span><input id="popupSizeInput" name="popupSize" type="text" inputmode="numeric" autocomplete="off" placeholder="10" aria-describedby="popupSizeHelp popupSizeError"><small id="popupSizeHelp" data-i18n="popupSizeHelp">The maximum number of closed-tab entries shown when you open Tab Echo from the browser toolbar. Choose from 1 to 200. This does not affect the full list or how many records are saved.</small><small id="popupSizeError" class="field-error" role="status" aria-live="polite"></small></label>
             </div>
             <h2 data-i18n="appearanceSection">Appearance and language</h2>
             <div class="settings-section">
@@ -112,9 +112,9 @@
               <label for="excludedDomainsInput"><span id="excludedDomainsLabel" data-i18n="excludedDomains">Excluded domains</span></label>
               <textarea id="excludedDomainsInput" name="excludedDomains" rows="4" placeholder="example.com" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-describedby="excludedDomainsHelp excludedDomainsError"></textarea>
               <small id="excludedDomainsHelp" data-i18n="excludedDomainsHelp">Enter domains you don't want Tab Echo to record, one per line. For example, example.com also excludes all of its subdomains. By default, saved rules affect only new closed-tab entries; if existing entries match, you can choose whether to remove them when saving.</small>
-              <small id="excludedDomainsError" class="field-error" role="alert"></small>
+              <small id="excludedDomainsError" class="field-error" role="status" aria-live="polite"></small>
             </section>
-            <div id="settingsImpactPanel" class="settings-impact" role="alert" hidden>
+            <div id="settingsImpactPanel" class="settings-impact" role="region" aria-live="polite" aria-labelledby="settingsImpactMessage" hidden>
               <p id="settingsImpactMessage"></p>
               <div class="settings-impact-actions">
                 <button id="confirmSettingsButton" type="button" class="primary-button" disabled data-i18n="confirmAndSave">Confirm and save</button>

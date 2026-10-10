@@ -227,7 +227,7 @@
   }
 
   function createResourceState(query = '') {
-    return { results: [], resultEventCount: 0, matchedTabCount: 0, totalEventCount: 0, totalTabCount: 0, loading: true, loadedQuery: null, token: 0, query };
+    return { results: [], resultEventCount: 0, matchedTabCount: 0, totalEventCount: 0, totalTabCount: 0, loading: true, loadedQuery: null, token: 0, query, serverPaged: false };
   }
 
   function isLoadedResultCurrent(resourceState) {
@@ -454,7 +454,7 @@
     }
 
     function makeStateNode(className, title, body) {
-      const panel = doc.createElement('div'); panel.className = className;
+      const panel = doc.createElement('div'); panel.className = className; panel.setAttribute('role', 'listitem');
       const strong = doc.createElement('strong'); strong.textContent = title;
       const copy = doc.createElement('span'); copy.textContent = body;
       panel.append(strong, copy); return panel;
@@ -493,13 +493,12 @@
       const formatted = formatTime(timestamp);
       node.className = `${node.className || ''} event-time`.trim();
       node.textContent = prefix ? `${prefix} ${formatted.relative}` : formatted.relative;
-      node.title = formatted.full;
       node.tabIndex = 0; node.dataset.fullTime = prefix ? `${prefix} ${formatted.full}` : formatted.full;
       node.setAttribute('aria-label', prefix ? `${prefix} ${formatted.full}` : formatted.full);
     }
 
     function renderTab(result, tab, key) {
-      const row = doc.createElement('div'); row.className = 'tab-row';
+      const row = doc.createElement('div'); row.className = 'tab-row'; row.setAttribute('role', 'listitem');
       const copy = doc.createElement('div'); copy.className = 'tab-copy';
       const title = doc.createElement('strong');
       const url = doc.createElement('span');
@@ -516,12 +515,13 @@
       const event = result.event;
       const isGroup = event.kind === 'group' || result.totalTabCount > 1;
       const expanded = isGroupExpanded(state.expanded, event.id, state.query);
-      const card = doc.createElement('article'); card.className = `event-card ${isGroup ? `is-group ${expanded ? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`;
+      const card = doc.createElement('article'); card.className = `event-card ${isGroup ? `is-group ${expanded ? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`; card.setAttribute('role', 'listitem');
       const header = doc.createElement('div'); header.className = 'event-header';
       let toggle;
       if (isGroup) {
         toggle = makeButton(expanded ? '⌄' : '›', 'toggle', { eventId: event.id }, 'chevron');
         toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-controls', `history-tabs-${encodeURIComponent(String(event.id))}`);
         toggle.setAttribute('aria-label', t(expanded ? 'collapse' : 'expand'));
       } else {
         toggle = null;
@@ -558,9 +558,9 @@
       );
       if (toggle) header.append(toggle);
       header.append(summary, actions); card.append(header);
-      if (isGroup && expanded) {
-        const list = doc.createElement('div'); list.className = 'tabs-list';
-        for (const { tab, key } of visibleTabs(result)) list.append(renderTab(result, tab, key));
+      if (isGroup) {
+        const list = doc.createElement('div'); list.className = 'tabs-list'; list.id = `history-tabs-${encodeURIComponent(String(event.id))}`; list.setAttribute('role', 'list'); list.hidden = !expanded;
+        if (expanded) for (const { tab, key } of visibleTabs(result)) list.append(renderTab(result, tab, key));
         card.append(list);
       }
       if (!currentResource('history') || state.actionPending.size > 0) {
@@ -573,12 +573,13 @@
       const event = result.event;
       const isGroup = event.kind === 'group' || result.totalTabCount > 1;
       const expanded = isGroupExpanded(state.expanded, event.id, state.query);
-      const card = doc.createElement('article'); card.className = `event-card ${isGroup ? `is-group ${expanded ? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`;
+      const card = doc.createElement('article'); card.className = `event-card ${isGroup ? `is-group ${expanded ? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`; card.setAttribute('role', 'listitem');
       const header = doc.createElement('div'); header.className = 'event-header';
       let toggle;
       if (isGroup) {
         toggle = makeButton(expanded ? '⌄' : '›', 'toggle-trash', { eventId: event.id }, 'chevron');
         toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-controls', `trash-tabs-${encodeURIComponent(String(event.id))}`);
         toggle.setAttribute('aria-label', t(expanded ? 'collapse' : 'expand'));
       } else { toggle = null; }
       const summary = doc.createElement('div'); summary.className = 'event-summary';
@@ -597,7 +598,7 @@
           : t('tabCount', { count: result.totalTabCount });
         const groupBadge = doc.createElement('span'); groupBadge.className = 'group-badge'; groupBadge.textContent = countText;
         identity.append(title, groupBadge);
-        meta.className = 'event-time'; meta.textContent = trashTiming; meta.title = trashTimingTitle; meta.tabIndex = 0; meta.dataset.fullTime = trashTimingTitle; meta.setAttribute('aria-label', trashTimingTitle);
+        meta.className = 'event-time'; meta.textContent = trashTiming; meta.tabIndex = 0; meta.dataset.fullTime = trashTimingTitle; meta.setAttribute('aria-label', trashTimingTitle);
         summary.append(identity, meta);
       } else {
         const [{ tab = {}, key } = {}] = visibleTabs(result);
@@ -605,7 +606,7 @@
         appendHighlightedText(doc, title, tab.title || tab.url, ranges.title);
         const details = doc.createElement('span'); details.className = 'event-details-inline';
         meta.className = 'event-address'; appendHighlightedText(doc, meta, tab.url, ranges.url);
-        const time = doc.createElement('time'); time.className = 'event-time'; time.textContent = trashTiming; time.title = trashTimingTitle; time.tabIndex = 0; time.dataset.fullTime = trashTimingTitle; time.setAttribute('aria-label', trashTimingTitle);
+        const time = doc.createElement('time'); time.className = 'event-time'; time.textContent = trashTiming; time.tabIndex = 0; time.dataset.fullTime = trashTimingTitle; time.setAttribute('aria-label', trashTimingTitle);
         details.append(meta, time); summary.append(title, details);
       }
       const actions = doc.createElement('div'); actions.className = 'event-actions';
@@ -615,9 +616,9 @@
       );
       if (toggle) header.append(toggle);
       header.append(summary, actions); card.append(header);
-      if (isGroup && expanded) {
-        const list = doc.createElement('div'); list.className = 'tabs-list';
-        for (const { tab, key } of visibleTabs(result)) list.append(renderTrashTab(result, tab, key));
+      if (isGroup) {
+        const list = doc.createElement('div'); list.className = 'tabs-list'; list.id = `trash-tabs-${encodeURIComponent(String(event.id))}`; list.setAttribute('role', 'list'); list.hidden = !expanded;
+        if (expanded) for (const { tab, key } of visibleTabs(result)) list.append(renderTrashTab(result, tab, key));
         card.append(list);
       }
       if (!currentResource('trash') || state.actionPending.size > 0) card.querySelectorAll('button[data-action]').forEach((button) => { button.disabled = true; });
@@ -625,7 +626,7 @@
     }
 
     function renderTrashTab(result, tab, key) {
-      const row = doc.createElement('div'); row.className = 'tab-row';
+      const row = doc.createElement('div'); row.className = 'tab-row'; row.setAttribute('role', 'listitem');
       const copy = doc.createElement('div'); copy.className = 'tab-copy';
       const title = doc.createElement('strong'); const url = doc.createElement('span');
       const ranges = (result.matchRanges && result.matchRanges[key]) || {};
@@ -648,8 +649,13 @@
       const selectedDomainLabel = selectedGroup ? (selectedGroup.key === '__multiple_domains__' ? t('multipleDomains') : (selectedGroup.key === '__unknown_domain__' ? t('unknownDomain') : selectedGroup.label)) : '';
       const renderResults = state.historyLayout === 'domain' ? (selectedGroup ? selectedGroup.results : []) : data.results;
       const scopedSelection = getResultSelection(renderResults);
-      const paged = paginateResults(renderResults, state.page, state.pageSize);
-      state.page = resolveRenderPage({ ...data, query: state.query, page: state.page }, renderResults.length, state.pageSize); elements.pageSize.value = String(state.pageSize);
+      const serverTotal = state.query ? data.resultEventCount : data.totalEventCount;
+      const paged = data.serverPaged && state.historyLayout === 'list'
+        ? { items: renderResults, page: state.page, pageCount: Math.max(1, Math.ceil(serverTotal / state.pageSize)), total: serverTotal }
+        : paginateResults(renderResults, state.page, state.pageSize);
+      state.page = data.serverPaged && state.historyLayout === 'list'
+        ? Math.min(paged.pageCount, Math.max(1, state.page))
+        : resolveRenderPage({ ...data, query: state.query, page: state.page }, renderResults.length, state.pageSize); elements.pageSize.value = String(state.pageSize);
       elements.list.hidden = state.historyLayout !== 'list'; elements.domainHistoryView.hidden = state.historyLayout !== 'domain';
       elements.historyLayoutToggle.querySelectorAll('[data-history-layout]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.historyLayout === state.historyLayout)));
       const targetList = state.historyLayout === 'domain' ? elements.domainList : elements.list;
@@ -704,8 +710,12 @@
         for (const control of [elements.trashPrevious, elements.trashNext, elements.trashPageSize, elements.restoreResults, elements.emptyTrash]) control.disabled = true;
         return;
       }
-      const paged = paginateResults(data.results, state.page, state.pageSize);
-      state.page = resolveRenderPage({ ...data, query: state.query, page: state.page }, data.results.length, state.pageSize); elements.trashPageSize.value = String(state.pageSize);
+      const serverTotal = state.query ? data.resultEventCount : data.totalEventCount;
+      const paged = data.serverPaged
+        ? { items: data.results, page: state.page, pageCount: Math.max(1, Math.ceil(serverTotal / state.pageSize)), total: serverTotal }
+        : paginateResults(data.results, state.page, state.pageSize);
+      state.page = data.serverPaged ? Math.min(paged.pageCount, Math.max(1, state.page))
+        : resolveRenderPage({ ...data, query: state.query, page: state.page }, data.results.length, state.pageSize); elements.trashPageSize.value = String(state.pageSize);
       elements.trashList.replaceChildren(); elements.trashList.setAttribute('aria-busy', 'false');
       if (!paged.total) elements.trashList.append(makeStateNode('empty-state', t(state.query ? 'trashNoMatchTitle' : 'trashEmptyTitle'), t(state.query ? 'trashNoMatchBody' : 'trashEmptyBody')));
       else for (const result of paged.items) elements.trashList.append(renderTrashEvent(result));
@@ -782,9 +792,6 @@
       if (!settings) return;
       state.language = settings.language === 'zh' ? 'zh' : 'en';
       state.theme = ['light', 'dark'].includes(settings.theme) ? settings.theme : 'system';
-      if (!new URLSearchParams(root.location.search).has('pageSize') && PAGE_SIZES.has(Number(settings.pageSize))) {
-        state.pageSize = Number(settings.pageSize);
-      }
       for (const name of ['maxRecords', 'maxAgeDays', 'trashMaxAgeDays']) {
         const input = elements.settingsForm.elements[name];
         if (input) input.value = settings[name] === null || settings[name] === undefined ? '' : String(settings[name]);
@@ -806,15 +813,35 @@
       elements.list.setAttribute('aria-busy', 'true');
       renderHistory();
       try {
-        const response = await sendMessage({ type: 'get-history', query: requestedQuery });
+        const collectAll = state.historyLayout === 'domain';
+        const requestLimit = collectAll ? 500 : state.pageSize;
+        const requestOffset = collectAll ? 0 : (state.page - 1) * state.pageSize;
+        const response = await sendMessage({ type: 'get-history', query: requestedQuery, offset: requestOffset, limit: requestLimit });
+        if (collectAll && response.pagination && response.pagination.hasMore) {
+          const allResults = Array.isArray(response.results) ? response.results.slice() : [];
+          let offset = response.pagination.offset + response.pagination.limit;
+          while (offset < Number(response.statistics && response.statistics.matchingRecords)) {
+            const next = await sendMessage({ type: 'get-history', query: requestedQuery, offset, limit: requestLimit });
+            allResults.push(...(Array.isArray(next.results) ? next.results : []));
+            if (!next.pagination || !next.pagination.hasMore || next.results.length === 0) break;
+            offset += next.pagination.limit;
+          }
+          response.results = allResults;
+        }
         if (token !== data.token) return { ok: false, stale: true };
         data.loading = false; data.loadedQuery = requestedQuery; state.expanded = new Map();
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal';
         data.results = Array.isArray(response.results) ? response.results : [];
+        data.serverPaged = !collectAll && Boolean(response.pagination);
         const counts = readStatistics(response, data.results);
         data.resultEventCount = counts.matchingRecords; data.matchedTabCount = counts.matchingTabs;
         data.resultTabCount = counts.resultTabs; data.totalEventCount = counts.totalRecords;
         data.totalTabCount = counts.totalTabs; data.displayedRecords = counts.displayedRecords; data.revision = counts.revision;
+        const matchingTotal = requestedQuery.trim() ? data.resultEventCount : data.totalEventCount;
+        const maxPage = Math.max(1, Math.ceil(matchingTotal / state.pageSize));
+        if (data.serverPaged && state.page > maxPage) {
+          state.page = maxPage; updateUrl('replaceState'); return refreshHistory();
+        }
         syncSettings(response.settings); if (state.view === 'history') { if (state.statusError) showStatus(''); renderHistory(); } return { ok: true };
       } catch (error) {
         if (token === data.token) { data.loading = false; data.loadedQuery = null; if (state.view === 'history') showError(error); }
@@ -826,14 +853,22 @@
       const data = state.trash; const token = ++data.token; const requestedQuery = state.query;
       data.loading = true; data.loadedQuery = null; data.query = requestedQuery; elements.retry.hidden = true; renderTrash();
       try {
-        const response = await sendMessage({ type: 'get-trash', query: requestedQuery });
+        const response = await sendMessage({
+          type: 'get-trash', query: requestedQuery,
+          offset: (state.page - 1) * state.pageSize, limit: state.pageSize,
+        });
         if (token !== data.token) return { ok: false, stale: true };
-        data.loading = false; data.loadedQuery = requestedQuery; state.expanded = new Map();
+        data.loading = false; data.loadedQuery = requestedQuery; data.serverPaged = Boolean(response.pagination); state.expanded = new Map();
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal'; data.results = sortTrashResults(response.results);
         const counts = readStatistics(response, data.results);
         data.resultEventCount = counts.matchingRecords; data.matchedTabCount = counts.matchingTabs;
         data.resultTabCount = counts.resultTabs; data.totalEventCount = counts.totalRecords;
         data.totalTabCount = counts.totalTabs; data.displayedRecords = counts.displayedRecords; data.revision = counts.revision;
+        const matchingTotal = requestedQuery.trim() ? data.resultEventCount : data.totalEventCount;
+        const maxPage = Math.max(1, Math.ceil(matchingTotal / state.pageSize));
+        if (data.serverPaged && state.page > maxPage) {
+          state.page = maxPage; updateUrl('replaceState'); return refreshTrash();
+        }
         syncSettings(response.settings); if (state.view === 'trash') { if (state.statusError) showStatus(''); renderTrash(); } return { ok: true };
       } catch (error) {
         if (token === data.token) { data.loading = false; data.loadedQuery = null; if (state.view === 'trash') { const message = errorMessage(error); showStatus(message, true); elements.retry.hidden = false; elements.trashList.replaceChildren(makeStateNode('error-state', message, message)); } }
@@ -950,7 +985,7 @@
       const button = event.target.closest('[data-history-layout]');
       if (!button || !['list', 'domain'].includes(button.dataset.historyLayout)) return;
       clearDestructiveConfirmation();
-      state.historyLayout = button.dataset.historyLayout; state.page = 1; persistView(); renderHistory();
+      state.historyLayout = button.dataset.historyLayout; state.page = 1; persistView(); refreshHistory();
     });
     elements.domainIndex.addEventListener('click', (event) => {
       const button = event.target.closest('[data-action="select-domain"]');
@@ -964,9 +999,14 @@
       root.clearTimeout(state.debounceTimer);
       state.debounceTimer = root.setTimeout(() => { if (state.view === 'history') refreshHistory(); else if (state.view === 'trash') refreshTrash(); }, 180);
     });
-    elements.pageSize.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; updateUrl(); renderHistory(); });
-    elements.previous.addEventListener('click', () => { if (state.page > 1) { state.page -= 1; updateUrl(); renderHistory(); } });
+    elements.pageSize.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; updateUrl(); refreshHistory(); });
+    elements.previous.addEventListener('click', () => { if (state.page > 1) { state.page -= 1; updateUrl(); refreshHistory(); } });
     elements.next.addEventListener('click', () => {
+      if (state.history.serverPaged && state.historyLayout === 'list') {
+        const total = state.query ? state.history.resultEventCount : state.history.totalEventCount;
+        if (state.page < Math.max(1, Math.ceil(total / state.pageSize))) { state.page += 1; updateUrl(); refreshHistory(); }
+        return;
+      }
       let results = state.history.results;
       if (state.historyLayout === 'domain' && domainGroups) {
         const groups = domainGroups.buildDomainGroups(results);
@@ -1004,8 +1044,8 @@
       else if (button.dataset.action === 'delete-trash') { elements.trashList.focus(); mutateTrash({ type: 'permanently-delete-trash', trashIds: [eventId] }, 'permanentlyDeleted', `delete:${eventId}`); }
     });
     elements.restoreResults.addEventListener('click', () => {
-      if (!currentResource('trash')) return; const selection = getResultSelection(state.trash.results); if (!selection.eventIds.length) return;
-      mutateTrash({ type: 'restore-trash', trashIds: selection.eventIds }, 'restoredEntries', 'restore:results', true);
+      if (!currentResource('trash') || !state.trash.resultEventCount) return;
+      mutateTrash({ type: 'restore-trash-results', query: state.query }, 'restoredEntries', 'restore:results', true);
     });
     elements.emptyTrash.addEventListener('click', showTrashEmptyConfirmation);
     elements.confirmEmptyTrash.addEventListener('click', () => {
@@ -1014,9 +1054,9 @@
       clearDestructiveConfirmation(); mutateTrash({ type: 'commit-destructive-action', token: pending.token }, 'emptiedTrash', 'empty:trash');
     });
     elements.cancelEmptyTrash.addEventListener('click', () => clearDestructiveConfirmation({ restoreFocus: true }));
-    elements.trashPageSize.addEventListener('change', () => { state.pageSize = Number(elements.trashPageSize.value); state.page = 1; updateUrl(); renderTrash(); });
-    elements.trashPrevious.addEventListener('click', () => { if (state.page > 1) { state.page -= 1; updateUrl(); renderTrash(); } });
-    elements.trashNext.addEventListener('click', () => { const max = paginateResults(state.trash.results, state.page, state.pageSize).pageCount; if (state.page < max) { state.page += 1; updateUrl(); renderTrash(); } });
+    elements.trashPageSize.addEventListener('change', () => { state.pageSize = Number(elements.trashPageSize.value); state.page = 1; updateUrl(); refreshTrash(); });
+    elements.trashPrevious.addEventListener('click', () => { if (state.page > 1) { state.page -= 1; updateUrl(); refreshTrash(); } });
+    elements.trashNext.addEventListener('click', () => { const total = state.query ? state.trash.resultEventCount : state.trash.totalEventCount; const max = Math.max(1, Math.ceil(total / state.pageSize)); if (state.page < max) { state.page += 1; updateUrl(); refreshTrash(); } });
     elements.moveHistory.addEventListener('click', () => {
       if (!currentResource('history')) return;
       if (state.historyLayout === 'domain' && domainGroups) {
@@ -1029,9 +1069,7 @@
         mutate({ type: 'move-to-trash', all: true }, 'moved', 'move:all');
         return;
       }
-      const selection = getResultSelection(state.history.results);
-      if (!selection.eventIds.length) return;
-      mutate({ type: 'move-to-trash', eventIds: selection.eventIds }, 'moved', 'move:results');
+      mutate({ type: 'move-to-trash', all: true, query: state.query }, 'moved', 'move:results');
     });
     elements.removeHistory.addEventListener('click', showHistoryRemovalConfirmation);
     elements.confirmHistoryRemove.addEventListener('click', () => {
