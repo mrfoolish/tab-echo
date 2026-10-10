@@ -82,10 +82,17 @@ test('storage pressure panel separates regular records from local incognito and 
     'localStorageValue', 'localStorageProgress', 'storageWriteWarning',
   ]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /id="storageHealthPanel"[^>]+aria-labelledby="storageHealthTitle"/);
-  assert.match(css, /\.storage-health\[data-level="(?:elevated|warning)"\]/);
+  assert.match(css, /\.storage-health\[data-level="elevated"\][^}]*color:\s*var\(--caution\)/s);
+  assert.match(css, /\.storage-health\[data-level="warning"\][^}]*color:\s*var\(--warning\)/s);
   assert.match(css, /\.storage-health\[data-level="critical"\]/);
+  assert.match(css, /\.storage-health\[data-level="normal"\][^}]*color:\s*var\(--success\)/s);
   assert.match(css, /progress::-webkit-progress-value[^}]*background:\s*var\(--accent\)/s);
   assert.doesNotMatch(css, /progress::-webkit-progress-value[^}]*var\(--success\)/s);
+  assert.match(css, /\.storage-pool-grid \{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)[^}]*column-gap:\s*36px[^}]*row-gap:\s*16px/s);
+  assert.match(css, /\.storage-pool \{[^}]*width:\s*100%/s);
+  assert.match(css, /\.storage-pool progress \{[^}]*width:\s*100%/s);
+  assert.match(js, /localStorageLabel: 'Incognito closed records'/);
+  assert.match(js, /localStorageLabel: '无痕关闭记录'/);
 });
 
 test('Dashboard renders the localized migration notice before acknowledging it once', async () => {
