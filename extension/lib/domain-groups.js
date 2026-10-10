@@ -82,9 +82,64 @@
     });
   }
 
+  function sortDomainGroups(groups) {
+    return groups.sort((left, right) => {
+      const countDifference = right.eventCount - left.eventCount;
+      if (countDifference !== 0) return countDifference;
+      const labelDifference = left.label.localeCompare(right.label);
+      if (labelDifference !== 0) return labelDifference;
+      return left.key.localeCompare(right.key);
+    });
+  }
+
+  function createDomainQuery(options = {}) {
+    const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
+    const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
+    const requestedDomain = typeof options.domain === 'string' ? options.domain : null;
+    const groupsByKey = new Map();
+
+    function add(result) {
+      const key = getResultDomainKey(result);
+      let group = groupsByKey.get(key);
+      if (!group) {
+        group = {
+          key, domain: key, label: getLabel(key), eventCount: 0, tabCount: 0,
+          eventIds: [], results: [],
+        };
+        groupsByKey.set(key, group);
+      }
+      const index = group.eventCount;
+      group.eventCount += 1;
+      group.tabCount += getTabCount(result);
+      if (result && result.event && result.event.id !== undefined && result.event.id !== null) {
+        group.eventIds.push(String(result.event.id));
+      }
+      if (index >= offset && group.results.length < limit) group.results.push(result);
+    }
+
+    function finish() {
+      const groups = sortDomainGroups(Array.from(groupsByKey.values()));
+      const selected = groups.find((group) => group.key === requestedDomain) || groups[0] || null;
+      return {
+        groups: groups.map(({ key, domain, label, eventCount, tabCount }) => (
+          { key, domain, label, eventCount, tabCount }
+        )),
+        selectedDomain: selected ? selected.key : null,
+        results: selected ? selected.results : [],
+        eventIds: selected ? selected.eventIds : [],
+        selectedRecords: selected ? selected.eventCount : 0,
+        selectedTabs: selected ? selected.tabCount : 0,
+      };
+    }
+
+    return { add, finish };
+  }
+
   return {
     MULTIPLE_DOMAINS_KEY,
     UNKNOWN_DOMAIN_KEY,
     buildDomainGroups,
+    createDomainQuery,
+    getResultDomainKey,
   };
 });

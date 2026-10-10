@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createIndexedDbStorageRepository } = require('../lib/indexeddb-storage-repository.js');
-const { KEYS } = require('../lib/indexeddb-migration.js');
-const { STORAGE_KEYS } = require('../lib/storage-repository.js');
+const { createIndexedDbStorageRepository } = require('../extension/lib/indexeddb-storage-repository.js');
+const { KEYS } = require('../extension/lib/indexeddb-migration.js');
+const { STORAGE_KEYS } = require('../extension/lib/storage-repository.js');
 
 function event(id, extra = {}) {
   return {
@@ -44,8 +44,10 @@ function memoryRecordStore() {
   const revisions = new Map();
   let failMutation = false;
   const key = (mode, generation) => `${mode}:${generation}`;
+  let scanCount = 0;
   return {
     values, mutations, revisions,
+    get scanCount() { return scanCount; },
     set failMutation(value) { failMutation = value; },
     async resetGeneration(mode, generation) {
       values.history.set(key(mode, generation), []);
@@ -83,6 +85,14 @@ function memoryRecordStore() {
         },
       };
     },
+    async scanGeneration(storeName, mode, generation, visit) {
+      scanCount += 1;
+      const bucket = structuredClone(values[storeName].get(key(mode, generation)) || [])
+        .sort(storeName === 'history'
+          ? (left, right) => right.closedAt - left.closedAt
+          : (left, right) => right.deletedAt - left.deletedAt);
+      for (const item of bucket) visit(item);
+    },
     async deleteGeneration(mode, generation) {
       values.history.delete(key(mode, generation));
       values.trash.delete(key(mode, generation));
@@ -95,7 +105,7 @@ function memoryRecordStore() {
       revisions.set(key(mode, generation), revision);
     },
     async applyGenerationChanges(mode, generation, changes, expectedRevision, nextRevision) {
-      if (failMutation) throw new Error('mutation failed');
+      if (failMutation) throw failMutation instanceof Error ? failMutation : new Error('mutation failed');
       mutations.push(structuredClone({ mode, generation, changes, expectedRevision, nextRevision }));
       for (const storeName of ['history', 'trash']) {
         const bucket = values[storeName].get(key(mode, generation)) || [];
@@ -131,6 +141,36 @@ test('migrated repository reads IndexedDB generations after removing local array
   assert.deepEqual(context.trash.map((item) => item.id), ['deleted']);
   assert.equal(context.revision, 4);
   assert.equal(storage.values[STORAGE_KEYS.history.normal], undefined);
+});
+
+test('keeps incognito collections in durable local storage and restores a prior IndexedDB generation', async () => {
+  const generation = 'incognito-live-generation';
+  const storage = memoryStorage({
+    [KEYS.marker.incognito]: {
+      version: 1, status: 'complete', mode: 'incognito', generation,
+      historyCount: 1, trashCount: 0, skippedRecords: 0, completedAt: 100,
+    },
+    [KEYS.generation.incognito]: generation,
+    [STORAGE_KEYS.revision.incognito]: 4,
+  });
+  const records = memoryRecordStore();
+  await records.resetGeneration('incognito', generation);
+  await records.putBatch('history', 'incognito', generation, [event('secret', { mode: 'incognito' })]);
+  const repository = createIndexedDbStorageRepository(storage, records, {
+    indexedModes: ['normal'],
+  });
+
+  const migration = await repository.migrateLegacyState('incognito');
+  await repository.updateContext('incognito', (context) => ({
+    history: context.history.concat(event('later', { mode: 'incognito' })),
+    trash: context.trash,
+  }));
+
+  assert.equal(migration.indexedDb.restored, true);
+  assert.deepEqual((await repository.readHistory('incognito')).map((item) => item.id), ['secret', 'later']);
+  assert.deepEqual(storage.values[STORAGE_KEYS.history.incognito].map((item) => item.id), ['secret', 'later']);
+  assert.equal(storage.values[KEYS.generation.incognito], undefined);
+  assert.equal(records.mutations.length, 0);
 });
 
 test('ordinary updates mutate the active generation without rewriting unchanged collections', async () => {
@@ -174,6 +214,28 @@ test('failed incremental transaction leaves the previous generation authoritativ
   assert.deepEqual((await repository.readHistory('normal')).map((item) => item.id), ['one']);
 });
 
+test('wraps native IndexedDB mutation failures with stable storage error details', async () => {
+  const storage = memoryStorage({ [STORAGE_KEYS.history.normal]: [event('one')] });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records);
+  await repository.migrateLegacyState('normal');
+  const quotaError = new Error('origin quota exhausted');
+  quotaError.name = 'QuotaExceededError';
+  records.failMutation = quotaError;
+
+  await assert.rejects(
+    repository.updateContext('normal', (context) => ({
+      history: context.history.concat(event('two')), trash: context.trash,
+    })),
+    (error) => error
+      && error.name === 'StorageWriteError'
+      && error.code === 'STORAGE_WRITE_FAILED'
+      && error.operation === 'indexedDB.updateContext(normal)'
+      && error.causeName === 'QuotaExceededError'
+      && error.retryable === false,
+  );
+});
+
 test('settings and cleaned records become visible through one metadata write', async () => {
   const storage = memoryStorage({
     [STORAGE_KEYS.history.normal]: [event('one'), event('two')],
@@ -195,6 +257,63 @@ test('settings and cleaned records become visible through one metadata write', a
   assert.equal(context.settingsRevision, 1);
 });
 
+test('retries a context read when the active generation changes before the read completes', async () => {
+  const storage = memoryStorage({ [STORAGE_KEYS.history.normal]: [event('old')] });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records, { now: () => 700 });
+  await repository.migrateLegacyState('normal');
+  const oldGeneration = storage.values[KEYS.generation.normal];
+  const newGeneration = 'replacement-generation';
+  await records.resetGeneration('normal', newGeneration);
+  await records.putBatch('history', 'normal', newGeneration, [event('new')]);
+  await records.setGenerationRevision('normal', newGeneration, 2);
+  const originalRead = records.readGeneration.bind(records);
+  let switched = false;
+  records.readGeneration = async (storeName, mode, generation) => {
+    const result = await originalRead(storeName, mode, generation);
+    if (!switched && generation === oldGeneration) {
+      switched = true;
+      storage.values[KEYS.generation.normal] = newGeneration;
+      storage.values[STORAGE_KEYS.revision.normal] = 2;
+      await records.deleteGeneration('normal', oldGeneration);
+    }
+    return result;
+  };
+
+  const context = await repository.readContext('normal');
+
+  assert.equal(switched, true);
+  assert.equal(context.revision, 2);
+  assert.deepEqual(context.history.map((item) => item.id), ['new']);
+});
+
+test('retries a paged query when an incremental revision changes during its cursor scan', async () => {
+  const storage = memoryStorage({ [STORAGE_KEYS.history.normal]: [event('old')] });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records);
+  await repository.migrateLegacyState('normal');
+  const generation = storage.values[KEYS.generation.normal];
+  const originalScan = records.scanGenerationPage.bind(records);
+  let switched = false;
+  records.scanGenerationPage = async (...args) => {
+    const result = await originalScan(...args);
+    if (!switched) {
+      switched = true;
+      const bucket = records.values.history.get(`normal:${generation}`);
+      bucket.push(event('new', { closedAt: 200 }));
+      records.revisions.set(`normal:${generation}`, 1);
+    }
+    return result;
+  };
+
+  const page = await repository.queryCollection('history', 'normal', '', { offset: 0, limit: 10 });
+
+  assert.equal(switched, true);
+  assert.equal(page.revision, 1);
+  assert.deepEqual(page.results.map((item) => item.event.id), ['new', 'old']);
+  assert.equal(page.statistics.totalRecords, 2);
+});
+
 test('indexed queries scan statistics but retain only the requested result page', async () => {
   const storage = memoryStorage({
     [STORAGE_KEYS.history.normal]: [
@@ -211,4 +330,55 @@ test('indexed queries scan statistics but retain only the requested result page'
   assert.equal(page.statistics.totalRecords, 3);
   assert.equal(page.statistics.matchingRecords, 3);
   assert.equal(page.statistics.totalTabs, 3);
+});
+
+test('domain query returns the index, selected page, and complete selected ids in one scan', async () => {
+  const storage = memoryStorage({
+    [STORAGE_KEYS.history.normal]: [
+      event('alpha-old', { closedAt: 1, tabs: [{ id: 'a1', title: 'old', url: 'https://alpha.example/old' }] }),
+      event('beta', { closedAt: 2, tabs: [{ id: 'b1', title: 'beta', url: 'https://beta.example/' }] }),
+      event('alpha-new', { closedAt: 3, tabs: [{ id: 'a2', title: 'new', url: 'https://alpha.example/new' }] }),
+    ],
+  });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records);
+  await repository.migrateLegacyState('normal');
+
+  const page = await repository.queryHistoryByDomain('normal', '', {
+    domain: 'alpha.example', offset: 1, limit: 1,
+  });
+
+  assert.equal(records.scanCount, 1);
+  assert.deepEqual(page.groups, [
+    { key: 'alpha.example', domain: 'alpha.example', label: 'alpha.example', eventCount: 2, tabCount: 2 },
+    { key: 'beta.example', domain: 'beta.example', label: 'beta.example', eventCount: 1, tabCount: 1 },
+  ]);
+  assert.equal(page.selectedDomain, 'alpha.example');
+  assert.deepEqual(page.results.map((item) => item.event.id), ['alpha-old']);
+  assert.deepEqual(page.eventIds, ['alpha-new', 'alpha-old']);
+  assert.equal(page.statistics.matchingRecords, 3);
+  assert.equal(page.statistics.selectedRecords, 2);
+});
+
+test('incognito domain queries stay on the durable legacy partition', async () => {
+  const storage = memoryStorage({
+    [STORAGE_KEYS.history.incognito]: [
+      event('private', {
+        mode: 'incognito',
+        tabs: [{ id: 'private-tab', title: 'Private', url: 'https://private.example/' }],
+      }),
+    ],
+    [STORAGE_KEYS.revision.incognito]: 6,
+  });
+  const records = memoryRecordStore();
+  const repository = createIndexedDbStorageRepository(storage, records, {
+    indexedModes: ['normal'],
+  });
+
+  const page = await repository.queryHistoryByDomain('incognito', '', { limit: 25 });
+
+  assert.equal(records.scanCount, 0);
+  assert.equal(page.revision, 6);
+  assert.equal(page.selectedDomain, 'private.example');
+  assert.deepEqual(page.results.map((item) => item.event.id), ['private']);
 });

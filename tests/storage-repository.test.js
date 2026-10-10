@@ -4,7 +4,7 @@ const test = require('node:test');
 const {
   STORAGE_KEYS,
   createStorageRepository,
-} = require('../lib/storage-repository.js');
+} = require('../extension/lib/storage-repository.js');
 
 const NOW = Date.parse('2026-09-18T12:00:00Z');
 const NOTICE_ID = 'migration-notice-test-id';

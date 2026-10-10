@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const timeFormat = require('../lib/time-format.js');
+const timeFormat = require('../extension/lib/time-format.js');
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;

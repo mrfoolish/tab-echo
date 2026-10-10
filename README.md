@@ -16,6 +16,7 @@ Tab Echo is a local-first Chrome extension for finding and reopening real closed
 - Provides a full-page dashboard for closed tabs, Trash, pagination, search, and settings. Closed tabs can be viewed by close time or domain; domain-view bulk actions affect only the selected domain.
 - Shows a configurable number of results in the popup (10 by default, 1–200) for quick search and actions.
 - Supports light, dark, and system themes, plus English and Chinese UI.
+- Shows separate storage pressure for regular IndexedDB records and local incognito/settings data, without combining their unrelated quotas.
 - Applies mixed cleanup: retention age first, then the oldest entries above the count limit; expired Trash is removed by age only.
 
 ## Retention Defaults
@@ -41,7 +42,7 @@ Moving entries to Trash, moving them back to Closed tabs, and immediately removi
 
 ### Incognito windows
 
-On `chrome://extensions`, open Tab Echo's details and enable **Allow in Incognito**. The manifest uses `"incognito": "split"`, so Chrome runs a separate extension context for incognito windows. Closed-tab history and Trash remain isolated; preferences are shared.
+On `chrome://extensions`, open Tab Echo's details and enable **Allow in Incognito**. The manifest uses `"incognito": "split"`, so Chrome runs a separate extension context for incognito windows. Closed-tab history and Trash remain isolated; preferences are shared. Large regular-context lists use IndexedDB; incognito records use context-isolated durable local storage so Chrome cannot discard them together with the incognito IndexedDB partition when the final incognito window closes.
 
 ## Data Migration
 
@@ -49,7 +50,7 @@ Existing local data is migrated automatically once. The old defaults `65,536 / 3
 
 ## Privacy and Permissions
 
-All data stays in `chrome.storage.local`. Tab Echo stores only closed-event metadata such as title, web address, favicon address, timestamps, ordering, and Group metadata. It does not collect page content, form state, scroll position, unrelated browsing history, or cross-device data.
+All data stays in browser-local storage: regular records use IndexedDB, while incognito records and shared settings use `chrome.storage.local`. Tab Echo stores only closed-event metadata such as title, web address, favicon address, timestamps, ordering, and Group metadata. It does not collect page content, form state, scroll position, unrelated browsing history, or cross-device data.
 
 The manifest permissions are deliberately limited:
 
@@ -72,11 +73,12 @@ The manifest permissions are deliberately limited:
 │   │   └── indexeddb-storage-repository.js # atomic generation switching and repository contract
 │   ├── dashboard.html/.css/.js       # full closed-tabs, Trash, and settings page
 │   ├── popup.html/.css/.js           # compact configurable-result toolbar UI
-│   ├── manifest.json
-│   └── tests/*.test.js               # logic, adapter, UI, and documentation contracts
+│   └── manifest.json                 # unpacked extension entry point
+├── tests/*.test.js                   # logic, adapter, UI, and documentation contracts
 ├── docs/adr/                          # architecture decisions
 ├── docs/superpowers/plans/            # implementation plan
 ├── docs/testing/                      # manual acceptance checklist
+├── package.json                       # dependency-free test and validation commands
 ├── CONTEXT.md                         # domain vocabulary
 ├── proposal.md                        # confirmed product specification
 ├── README.md
@@ -87,8 +89,10 @@ The manifest permissions are deliberately limited:
 The extension uses plain Manifest V3 JavaScript and has no build step. Run the complete automated suite with:
 
 ```bash
-node --test extension/tests/*.test.js
+npm test
 ```
+
+Run JavaScript syntax, manifest, and patch checks with `npm run check`.
 
 ## License
 

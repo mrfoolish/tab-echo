@@ -50,6 +50,9 @@
       settingsIntro: 'Manage retention, display, appearance, and exclusions.', settingsLoading: 'Loading settings…', settingsSaved: 'Settings saved.',
       settingsScope: 'Settings are shared. This preview only counts data in the current {mode}. The other browsing context applies the same settings later.',
       retentionSection: 'Storage and cleanup', displaySection: 'Toolbar popup', appearanceSection: 'Appearance and language', exclusionsSection: 'Excluded domains',
+      storageHealthTitle: 'Storage pressure', regularStorageLabel: 'Regular closed records', localStorageLabel: 'Incognito records and settings',
+      storageNormal: 'Normal', storageElevated: 'Elevated', storageWarning: 'Running low', storageCritical: 'Almost full', storageUnknown: 'Unavailable',
+      storageUnavailable: 'Capacity unavailable', storageUsage: '{percent} · {used} of {quota}', storageWriteWarning: 'A recent storage write failed. Free browser storage before adding more records.',
       settingsCleanupPending: 'Settings saved. Cleanup for this browsing context will finish on its next read or automatic cleanup.',
       settingsOtherPending: ' The other regular or incognito browsing context will apply these settings on its next start or read.',
       restoreRefreshFailed: 'Restored successfully, but refreshing the list failed. Please try again.',
@@ -108,6 +111,9 @@
       settingsIntro: '管理保存规则、工具栏弹窗、外观和排除域名。', settingsLoading: '正在加载设置…', settingsSaved: '设置已保存。',
       settingsScope: '设置在常规与无痕上下文间共享；本次预览只统计当前{mode}的数据，另一浏览上下文会在之后应用相同设置。',
       retentionSection: '保存与清理', displaySection: '工具栏弹窗', appearanceSection: '外观与语言', exclusionsSection: '排除域名',
+      storageHealthTitle: '存储空间', regularStorageLabel: '常规关闭记录', localStorageLabel: '无痕记录与设置',
+      storageNormal: '空间充足', storageElevated: '占用偏高', storageWarning: '空间紧张', storageCritical: '空间将满', storageUnknown: '暂不可用',
+      storageUnavailable: '无法获取容量', storageUsage: '{percent} · 已用 {used} / 共 {quota}', storageWriteWarning: '最近一次写入存储失败，请释放浏览器存储空间后再添加记录。',
       settingsCleanupPending: '设置已保存。当前浏览上下文的数据清理将在下次读取或自动清理时完成。',
       settingsOtherPending: '常规/无痕的另一浏览上下文会在其下次启动或读取时应用。',
       restoreRefreshFailed: '恢复成功，但列表刷新失败，请重试。',
@@ -227,7 +233,12 @@
   }
 
   function createResourceState(query = '') {
-    return { results: [], resultEventCount: 0, matchedTabCount: 0, totalEventCount: 0, totalTabCount: 0, loading: true, loadedQuery: null, token: 0, query, serverPaged: false };
+    return {
+      results: [], resultEventCount: 0, matchedTabCount: 0, totalEventCount: 0,
+      totalTabCount: 0, loading: true, loadedQuery: null, token: 0, query,
+      serverPaged: false, domainGroups: [], domainEventIds: [],
+      selectedDomainEventCount: 0, selectedDomainTabCount: 0,
+    };
   }
 
   function isLoadedResultCurrent(resourceState) {
@@ -243,6 +254,11 @@
     const source = Array.isArray(groups) ? groups : [];
     if (source.some((group) => group && group.key === selectedKey)) return selectedKey;
     return source.length && source[0] ? source[0].key : null;
+  }
+
+  function resolveAdjacentIndex(currentIndex, length, direction) {
+    const next = Number(currentIndex) + Number(direction);
+    return Number.isSafeInteger(next) && next >= 0 && next < Number(length) ? next : null;
   }
 
   function resolveRenderPage(resourceState, resultCount, pageSize) {
@@ -313,6 +329,24 @@
     if (offset < text.length || text.length === 0) parent.append(doc.createTextNode(text.slice(offset)));
   }
 
+  function formatStorageBytes(value, language = 'en') {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let amount = bytes;
+    let unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+    const digits = amount >= 10 || Number.isInteger(amount) ? 0 : 1;
+    return `${new Intl.NumberFormat(language === 'zh' ? 'zh-CN' : 'en', { maximumFractionDigits: digits }).format(amount)} ${units[unit]}`;
+  }
+
+  function formatStoragePercent(value, language = 'en') {
+    const ratio = Number(value);
+    if (!Number.isFinite(ratio) || ratio < 0) return '';
+    if (ratio > 0 && ratio < 0.01) return language === 'zh' ? '不到 1%' : 'Less than 1%';
+    return `${Math.round(ratio * 100)}%`;
+  }
+
   function start() {
     const doc = root.document;
     if (!doc || !root.chrome || !root.chrome.runtime) return;
@@ -320,7 +354,7 @@
       ...parseUrlState(root.location.search), mode: 'normal', language: 'en', theme: 'system',
       historyLayout: 'list', selectedDomain: null,
       history: createResourceState(parseUrlState(root.location.search).query), trash: createResourceState(parseUrlState(root.location.search).query),
-      expanded: new Map(), debounceTimer: null, settingsRequestToken: 0,
+      expanded: new Map(), debounceTimer: null, settingsRequestToken: 0, storageHealthRequestToken: 0, storageHealth: null,
       loading: true, loadedQuery: null, actionPending: new Set(),
       pendingSettingsConfirmation: null, pendingDestructiveAction: null, statusTimer: null, statusError: false,
     };
@@ -349,8 +383,11 @@
       confirmSettings: doc.getElementById('confirmSettingsButton'), confirmSettingsAndRemove: doc.getElementById('confirmSettingsAndRemoveButton'), cancelSettingsImpact: doc.getElementById('cancelSettingsImpactButton'),
       historyLayoutToggle: doc.getElementById('historyLayoutToggle'), domainHistoryView: doc.getElementById('domainHistoryView'),
       domainIndex: doc.getElementById('domainIndex'), domainList: doc.getElementById('domainHistoryList'),
+      storageHealthPanel: doc.getElementById('storageHealthPanel'), storageHealthStatus: doc.getElementById('storageHealthStatus'),
+      regularStorageValue: doc.getElementById('regularStorageValue'), regularStorageProgress: doc.getElementById('regularStorageProgress'),
+      localStorageValue: doc.getElementById('localStorageValue'), localStorageProgress: doc.getElementById('localStorageProgress'),
+      storageWriteWarning: doc.getElementById('storageWriteWarning'),
     };
-    const domainGroups = root.TabEchoDomainGroups;
     const timeFormat = root.TabEchoTimeFormat;
 
     function t(key, values = {}) {
@@ -378,6 +415,7 @@
       elements.historyLayoutToggle.setAttribute('aria-label', t('historyLayoutLabel'));
       elements.domainIndex.setAttribute('aria-label', t('domainIndexLabel'));
       elements.retry.textContent = t('retry');
+      if (state.view === 'settings') renderStorageHealth(state.storageHealth);
       const viewLabel = t(state.view === 'history' ? 'closedTabs' : state.view);
       elements.modeLabel.textContent = `${t(state.mode === 'incognito' ? 'incognitoMode' : 'regularMode')} · ${t('closedTabs')}`;
       doc.title = `Tab Echo - ${viewLabel}`;
@@ -431,7 +469,7 @@
     function switchView(view, options = {}) {
       const nextView = VIEWS.has(view) ? view : 'history';
       clearDestructiveConfirmation();
-      if (nextView !== 'settings') { state.settingsRequestToken += 1; clearSettingsImpact(); }
+      if (nextView !== 'settings') { state.settingsRequestToken += 1; state.storageHealthRequestToken += 1; clearSettingsImpact(); }
       state.view = nextView;
       if (options.resetPage !== false) state.page = 1;
       elements.historyView.hidden = state.view !== 'history';
@@ -642,18 +680,25 @@
         elements.moveHistory.disabled = true; elements.removeHistory.disabled = true;
         return;
       }
-      const groups = domainGroups && typeof domainGroups.buildDomainGroups === 'function'
-        ? domainGroups.buildDomainGroups(data.results) : [];
+      const groups = state.historyLayout === 'domain' ? data.domainGroups : [];
       state.selectedDomain = resolveDomainSelection(groups, state.selectedDomain);
       const selectedGroup = groups.find((group) => group.key === state.selectedDomain);
       const selectedDomainLabel = selectedGroup ? (selectedGroup.key === '__multiple_domains__' ? t('multipleDomains') : (selectedGroup.key === '__unknown_domain__' ? t('unknownDomain') : selectedGroup.label)) : '';
-      const renderResults = state.historyLayout === 'domain' ? (selectedGroup ? selectedGroup.results : []) : data.results;
-      const scopedSelection = getResultSelection(renderResults);
-      const serverTotal = state.query ? data.resultEventCount : data.totalEventCount;
-      const paged = data.serverPaged && state.historyLayout === 'list'
+      const renderResults = data.results;
+      const scopedSelection = state.historyLayout === 'domain'
+        ? {
+          eventIds: data.domainEventIds,
+          eventCount: data.selectedDomainEventCount,
+          tabCount: data.selectedDomainTabCount,
+        }
+        : getResultSelection(renderResults);
+      const serverTotal = state.historyLayout === 'domain'
+        ? data.selectedDomainEventCount
+        : (state.query ? data.resultEventCount : data.totalEventCount);
+      const paged = data.serverPaged
         ? { items: renderResults, page: state.page, pageCount: Math.max(1, Math.ceil(serverTotal / state.pageSize)), total: serverTotal }
         : paginateResults(renderResults, state.page, state.pageSize);
-      state.page = data.serverPaged && state.historyLayout === 'list'
+      state.page = data.serverPaged
         ? Math.min(paged.pageCount, Math.max(1, state.page))
         : resolveRenderPage({ ...data, query: state.query, page: state.page }, renderResults.length, state.pageSize); elements.pageSize.value = String(state.pageSize);
       elements.list.hidden = state.historyLayout !== 'list'; elements.domainHistoryView.hidden = state.historyLayout !== 'domain';
@@ -667,6 +712,7 @@
           const localizedLabel = group.key === '__multiple_domains__' ? t('multipleDomains')
             : (group.key === '__unknown_domain__' ? t('unknownDomain') : group.label);
           const button = makeButton(localizedLabel, 'select-domain', { domainKey: group.key }, 'domain-button');
+          button.tabIndex = group.key === state.selectedDomain ? 0 : -1;
           button.setAttribute('aria-label', `${localizedLabel}, ${t('domainRecordCount', { count: group.eventCount })}`);
           const label = doc.createElement('span'); label.className = 'domain-label'; label.textContent = localizedLabel;
           const count = doc.createElement('span'); count.className = 'domain-count'; count.textContent = group.key === '__multiple_domains__'
@@ -741,9 +787,13 @@
     async function showHistoryRemovalConfirmation() {
       if (!currentResource('history')) return;
       const data = state.history; const query = state.query.trim();
-      const groups = domainGroups && state.historyLayout === 'domain' ? domainGroups.buildDomainGroups(data.results) : [];
+      const groups = state.historyLayout === 'domain' ? data.domainGroups : [];
       const selected = groups.find((group) => group.key === state.selectedDomain);
-      const scoped = selected ? getResultSelection(selected.results) : null;
+      const scoped = selected ? {
+        eventIds: data.domainEventIds,
+        eventCount: data.selectedDomainEventCount,
+        tabCount: data.selectedDomainTabCount,
+      } : null;
       const domainLabel = selected ? (selected.key === '__multiple_domains__' ? t('multipleDomains') : (selected.key === '__unknown_domain__' ? t('unknownDomain') : selected.label)) : '';
       const eventCount = scoped ? scoped.eventCount : (query ? data.resultEventCount : data.totalEventCount);
       if (!eventCount) return;
@@ -813,31 +863,31 @@
       elements.list.setAttribute('aria-busy', 'true');
       renderHistory();
       try {
-        const collectAll = state.historyLayout === 'domain';
-        const requestLimit = collectAll ? 500 : state.pageSize;
-        const requestOffset = collectAll ? 0 : (state.page - 1) * state.pageSize;
-        const response = await sendMessage({ type: 'get-history', query: requestedQuery, offset: requestOffset, limit: requestLimit });
-        if (collectAll && response.pagination && response.pagination.hasMore) {
-          const allResults = Array.isArray(response.results) ? response.results.slice() : [];
-          let offset = response.pagination.offset + response.pagination.limit;
-          while (offset < Number(response.statistics && response.statistics.matchingRecords)) {
-            const next = await sendMessage({ type: 'get-history', query: requestedQuery, offset, limit: requestLimit });
-            allResults.push(...(Array.isArray(next.results) ? next.results : []));
-            if (!next.pagination || !next.pagination.hasMore || next.results.length === 0) break;
-            offset += next.pagination.limit;
+        const requestOffset = (state.page - 1) * state.pageSize;
+        const request = state.historyLayout === 'domain'
+          ? {
+            type: 'get-history-by-domain', query: requestedQuery,
+            domain: state.selectedDomain, offset: requestOffset, limit: state.pageSize,
           }
-          response.results = allResults;
-        }
+          : { type: 'get-history', query: requestedQuery, offset: requestOffset, limit: state.pageSize };
+        const response = await sendMessage(request);
         if (token !== data.token) return { ok: false, stale: true };
         data.loading = false; data.loadedQuery = requestedQuery; state.expanded = new Map();
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal';
         data.results = Array.isArray(response.results) ? response.results : [];
-        data.serverPaged = !collectAll && Boolean(response.pagination);
+        data.serverPaged = Boolean(response.pagination);
+        data.domainGroups = Array.isArray(response.groups) ? response.groups : [];
+        data.domainEventIds = Array.isArray(response.eventIds) ? response.eventIds : [];
+        if (state.historyLayout === 'domain') state.selectedDomain = response.selectedDomain || null;
         const counts = readStatistics(response, data.results);
         data.resultEventCount = counts.matchingRecords; data.matchedTabCount = counts.matchingTabs;
         data.resultTabCount = counts.resultTabs; data.totalEventCount = counts.totalRecords;
         data.totalTabCount = counts.totalTabs; data.displayedRecords = counts.displayedRecords; data.revision = counts.revision;
-        const matchingTotal = requestedQuery.trim() ? data.resultEventCount : data.totalEventCount;
+        data.selectedDomainEventCount = Math.max(0, Number(response.statistics && response.statistics.selectedRecords) || 0);
+        data.selectedDomainTabCount = Math.max(0, Number(response.statistics && response.statistics.selectedTabs) || 0);
+        const matchingTotal = state.historyLayout === 'domain'
+          ? data.selectedDomainEventCount
+          : (requestedQuery.trim() ? data.resultEventCount : data.totalEventCount);
         const maxPage = Math.max(1, Math.ceil(matchingTotal / state.pageSize));
         if (data.serverPaged && state.page > maxPage) {
           state.page = maxPage; updateUrl('replaceState'); return refreshHistory();
@@ -937,9 +987,49 @@
       if (first) first.focus();
     }
 
+    function renderStoragePool(pool, valueNode, progressNode) {
+      if (!pool || !pool.supported) {
+        valueNode.textContent = t('storageUnavailable');
+        progressNode.hidden = true;
+        progressNode.removeAttribute('value');
+        return;
+      }
+      valueNode.textContent = t('storageUsage', {
+        used: formatStorageBytes(pool.bytesUsed, state.language),
+        quota: formatStorageBytes(pool.quotaBytes, state.language),
+        percent: formatStoragePercent(pool.usageRatio, state.language),
+      });
+      progressNode.hidden = false;
+      progressNode.value = Math.min(1, Math.max(0, Number(pool.usageRatio) || 0));
+    }
+
+    function renderStorageHealth(health) {
+      state.storageHealth = health && typeof health === 'object' ? health : null;
+      const level = state.storageHealth && ['normal', 'elevated', 'warning', 'critical'].includes(state.storageHealth.level)
+        ? state.storageHealth.level : 'unknown';
+      elements.storageHealthPanel.dataset.level = level;
+      elements.storageHealthStatus.textContent = t(`storage${level.charAt(0).toUpperCase()}${level.slice(1)}`);
+      const pools = (state.storageHealth && state.storageHealth.pools) || {};
+      renderStoragePool(pools.regularRecords, elements.regularStorageValue, elements.regularStorageProgress);
+      renderStoragePool(pools.localData, elements.localStorageValue, elements.localStorageProgress);
+      elements.storageWriteWarning.hidden = !(state.storageHealth && state.storageHealth.lastWriteFailure);
+      elements.storageWriteWarning.textContent = t('storageWriteWarning');
+    }
+
+    async function refreshStorageHealth() {
+      const token = ++state.storageHealthRequestToken;
+      try {
+        const health = await sendMessage({ type: 'get-storage-health' });
+        if (token === state.storageHealthRequestToken && state.view === 'settings') renderStorageHealth(health);
+      } catch (_) {
+        if (token === state.storageHealthRequestToken && state.view === 'settings') renderStorageHealth(null);
+      }
+    }
+
     async function refreshSettings() {
       const token = ++state.settingsRequestToken; clearSettingsImpact(); elements.settingsForm.setAttribute('aria-busy', 'true'); elements.saveSettings.disabled = true;
       elements.settingsSummary.textContent = t('settingsLoading');
+      refreshStorageHealth();
       try {
         const response = await sendMessage({ type: 'get-settings' }); if (token !== state.settingsRequestToken || state.view !== 'settings') return;
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal'; syncSettings(response.settings); clearSettingsErrors();
@@ -985,11 +1075,49 @@
       const button = event.target.closest('[data-history-layout]');
       if (!button || !['list', 'domain'].includes(button.dataset.historyLayout)) return;
       clearDestructiveConfirmation();
-      state.historyLayout = button.dataset.historyLayout; state.page = 1; persistView(); refreshHistory();
+      state.historyLayout = button.dataset.historyLayout; state.page = 1; persistView();
+      refreshHistory().then((result) => {
+        if (state.historyLayout === 'domain' && result && result.ok) focusSelectedDomain();
+      });
     });
+    function focusSelectedDomain() {
+      const buttons = Array.from(elements.domainIndex.querySelectorAll('[data-action="select-domain"]'));
+      const selected = buttons.find((button) => button.dataset.domainKey === state.selectedDomain);
+      if (!selected) return;
+      selected.focus();
+      selected.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    function selectDomain(domainKey, options = {}) {
+      if (!domainKey || domainKey === state.selectedDomain) return;
+      clearDestructiveConfirmation(); state.selectedDomain = domainKey; state.page = 1;
+      const buttons = Array.from(elements.domainIndex.querySelectorAll('[data-action="select-domain"]'));
+      buttons.forEach((button) => { button.tabIndex = button.dataset.domainKey === domainKey ? 0 : -1; });
+      const selected = buttons.find((button) => button.dataset.domainKey === domainKey);
+      if (options.focus && selected) {
+        selected.focus();
+        selected.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      updateUrl();
+      refreshHistory().then((result) => {
+        if (options.focus && result && result.ok) focusSelectedDomain();
+      });
+    }
     elements.domainIndex.addEventListener('click', (event) => {
       const button = event.target.closest('[data-action="select-domain"]');
-      if (!button) return; clearDestructiveConfirmation(); state.selectedDomain = button.dataset.domainKey; state.page = 1; renderHistory();
+      if (button) selectDomain(button.dataset.domainKey);
+    });
+    elements.domainIndex.addEventListener('keydown', (event) => {
+      const direction = event.key === 'ArrowDown' ? 1 : (event.key === 'ArrowUp' ? -1 : 0);
+      if (!direction) return;
+      const button = event.target.closest('[data-action="select-domain"]');
+      if (!button) return;
+      const buttons = Array.from(elements.domainIndex.querySelectorAll('[data-action="select-domain"]'));
+      const nextIndex = resolveAdjacentIndex(
+        buttons.indexOf(button), buttons.length, direction,
+      );
+      if (nextIndex === null) return;
+      event.preventDefault();
+      selectDomain(buttons[nextIndex].dataset.domainKey, { focus: true });
     });
     elements.search.addEventListener('input', () => {
       clearDestructiveConfirmation();
@@ -1002,18 +1130,14 @@
     elements.pageSize.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; updateUrl(); refreshHistory(); });
     elements.previous.addEventListener('click', () => { if (state.page > 1) { state.page -= 1; updateUrl(); refreshHistory(); } });
     elements.next.addEventListener('click', () => {
-      if (state.history.serverPaged && state.historyLayout === 'list') {
-        const total = state.query ? state.history.resultEventCount : state.history.totalEventCount;
+      if (state.history.serverPaged) {
+        const total = state.historyLayout === 'domain'
+          ? state.history.selectedDomainEventCount
+          : (state.query ? state.history.resultEventCount : state.history.totalEventCount);
         if (state.page < Math.max(1, Math.ceil(total / state.pageSize))) { state.page += 1; updateUrl(); refreshHistory(); }
         return;
       }
-      let results = state.history.results;
-      if (state.historyLayout === 'domain' && domainGroups) {
-        const groups = domainGroups.buildDomainGroups(results);
-        const selected = groups.find((group) => group.key === state.selectedDomain);
-        results = selected ? selected.results : [];
-      }
-      const max = paginateResults(results, state.page, state.pageSize).pageCount;
+      const max = paginateResults(state.history.results, state.page, state.pageSize).pageCount;
       if (state.page < max) { state.page += 1; updateUrl(); renderHistory(); }
     });
     function handleHistoryListClick(event) {
@@ -1059,9 +1183,8 @@
     elements.trashNext.addEventListener('click', () => { const total = state.query ? state.trash.resultEventCount : state.trash.totalEventCount; const max = Math.max(1, Math.ceil(total / state.pageSize)); if (state.page < max) { state.page += 1; updateUrl(); refreshTrash(); } });
     elements.moveHistory.addEventListener('click', () => {
       if (!currentResource('history')) return;
-      if (state.historyLayout === 'domain' && domainGroups) {
-        const selected = domainGroups.buildDomainGroups(state.history.results).find((group) => group.key === state.selectedDomain);
-        const selection = getResultSelection(selected ? selected.results : []);
+      if (state.historyLayout === 'domain') {
+        const selection = { eventIds: state.history.domainEventIds };
         if (selection.eventIds.length) mutate({ type: 'move-to-trash', eventIds: selection.eventIds }, 'moved', 'move:domain');
         return;
       }
@@ -1087,7 +1210,7 @@
           : await sendMessage({ type: 'save-settings', settings });
         if (token !== state.settingsRequestToken || state.view !== 'settings') return; clearSettingsImpact(); syncSettings(saved.settings);
         let message = t(saved.cleanupPending ? 'settingsCleanupPending' : 'settingsSaved'); if (saved.otherContextPending) message += t('settingsOtherPending');
-        elements.settingsSummary.textContent = message; showStatus(message);
+        elements.settingsSummary.textContent = message; showStatus(message); refreshStorageHealth();
       } catch (error) {
         if (token === state.settingsRequestToken && state.view === 'settings') { if (error.code === 'INVALID_SETTINGS' && error.fields) showSettingsErrors(error.fields); else showStatus(errorMessage(error), true); }
       } finally { endAction(state.actionPending, 'save:settings'); if (token === state.settingsRequestToken && state.view === 'settings') { elements.saveSettings.disabled = false; elements.confirmSettings.disabled = !state.pendingSettingsConfirmation; } }
@@ -1176,8 +1299,8 @@
   }
 
   return {
-    appendHighlightedText, beginAction, buildRetentionPatch, buildTabRangeKeys, buildUrlState, endAction, getImpactCounts, getResultSelection,
-    isGroupExpanded, isLoadedResultCurrent, paginateResults, parseExcludedDomainsInput, parseUrlState, readStatistics, resolveDomainSelection, resolveRenderPage, start,
+    appendHighlightedText, beginAction, buildRetentionPatch, buildTabRangeKeys, buildUrlState, endAction, formatStorageBytes, formatStoragePercent, getImpactCounts, getResultSelection,
+    isGroupExpanded, isLoadedResultCurrent, paginateResults, parseExcludedDomainsInput, parseUrlState, readStatistics, resolveAdjacentIndex, resolveDomainSelection, resolveRenderPage, start,
     sortTrashResults,
   };
 });

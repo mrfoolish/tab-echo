@@ -31,7 +31,7 @@ const {
   getAddedExcludedDomains,
   previewSettingsImpact,
   applySettingsAndOptionalExclusionCleanup,
-} = require('../lib/history-store.js');
+} = require('../extension/lib/history-store.js');
 
 const TEST_NOW = Date.parse('2026-07-27T12:00:00Z');
 

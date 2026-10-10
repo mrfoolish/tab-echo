@@ -1,5 +1,6 @@
 importScripts(
   'lib/history-store.js',
+  'lib/domain-groups.js',
   'lib/storage-repository.js',
   'lib/indexeddb-repository.js',
   'lib/indexeddb-migration.js',
@@ -27,6 +28,7 @@ const {
   validateSettingsInput,
 } = self.TabEchoHistoryStore;
 const { createStorageRepository } = self.TabEchoStorageRepository;
+const { createDomainQuery } = self.TabEchoDomainGroups;
 const { createCloseTracker, createTrackerPersistence, isHttpUrl } = self.TabEchoCloseTracker;
 
 const CLOSE_BATCH_DELAY_MS = 450;
@@ -51,7 +53,7 @@ const repository = indexedDbRecordStore
   ? self.TabEchoIndexedDbStorageRepository.createIndexedDbStorageRepository(
     chrome.storage.local,
     indexedDbRecordStore,
-    { legacyRepository: localRepository },
+    { legacyRepository: localRepository, indexedModes: ['normal'] },
   )
   : localRepository;
 const trackerPersistence = createTrackerPersistence(
@@ -129,11 +131,13 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   enqueueTrackerMutation(async () => {
     const result = tracker.removeTab(tabId, removeInfo);
-    // Durability boundary: the pending close is in session before a timer is scheduled.
-    await persistTrackerState();
-    if (!result.ignored && !result.windowClosing) {
-      scheduleBatchFlush(result.windowId);
+    if (!result.windowClosing) {
+      // Ordinary tab closes need a durable pending batch before their timer is scheduled.
+      await persistTrackerState();
+      if (!result.ignored) scheduleBatchFlush(result.windowId);
     }
+    // Whole-window closes reuse the already durable window snapshot. Persisting the same
+    // snapshot once per removed tab creates quadratic write amplification for large windows.
     await commitAllPendingEvents();
   }).catch(reportError);
 });
@@ -341,6 +345,67 @@ async function handleMessage(message) {
       events: searchEvents(compatibilityState, activeMode, message.query || ''),
     };
   }
+  if (action === 'get-history-by-domain') {
+    const pagination = normalizeListPagination(message, 1);
+    let page;
+    if (typeof repository.queryHistoryByDomain === 'function') {
+      page = await repository.queryHistoryByDomain(
+        activeMode, message.query || '', {
+          ...pagination,
+          domain: typeof message.domain === 'string' ? message.domain : null,
+        },
+      );
+    } else {
+      const context = await readPrunedContext();
+      const source = context.history.slice().sort((left, right) => right.closedAt - left.closedAt);
+      const results = buildSearchResults(source, message.query || '', { deduplicateSingles: false });
+      const query = createDomainQuery({
+        domain: typeof message.domain === 'string' ? message.domain : null,
+        ...pagination,
+      });
+      results.forEach((result) => query.add(result));
+      const grouped = query.finish();
+      page = {
+        settings: context.settings,
+        revision: context.revision,
+        ...grouped,
+        statistics: {
+          totalRecords: source.length,
+          totalTabs: countTabs(source),
+          matchingRecords: results.length,
+          matchingTabs: results.reduce((sum, item) => sum + item.matchedTabCount, 0),
+          resultTabs: results.reduce((sum, item) => sum + item.totalTabCount, 0),
+          selectedRecords: grouped.selectedRecords,
+          selectedTabs: grouped.selectedTabs,
+        },
+      };
+    }
+    const statistics = {
+      revision: page.revision,
+      ...page.statistics,
+      displayedRecords: page.results.length,
+    };
+    return {
+      mode: activeMode,
+      settings: page.settings,
+      revision: page.revision,
+      statistics,
+      groups: page.groups,
+      selectedDomain: page.selectedDomain,
+      eventIds: page.eventIds,
+      totalEventCount: statistics.totalRecords,
+      totalTabCount: statistics.totalTabs,
+      resultEventCount: statistics.matchingRecords,
+      matchedTabCount: statistics.matchingTabs,
+      resultTabCount: statistics.resultTabs,
+      pagination: {
+        offset: pagination.offset,
+        limit: pagination.limit,
+        hasMore: pagination.offset + page.results.length < statistics.selectedRecords,
+      },
+      results: page.results,
+    };
+  }
   if (action === 'get-history' || action === 'get-trash') {
     if (message.limit !== undefined && typeof repository.queryCollection === 'function') {
       const pagination = normalizeListPagination(message, 1);
@@ -531,35 +596,61 @@ async function getStorageHealth() {
   }
   const localSupported = localBytesUsed !== null
     && Number.isFinite(localQuotaBytes) && localQuotaBytes > 0;
-  if (!originEstimate && !localSupported) {
-    return {
-      supported: false,
-      bytesUsed: null,
-      quotaBytes: null,
-      usageRatio: null,
-      level: 'unknown',
-      lastWriteFailure,
-    };
-  }
-  const bytesUsed = originEstimate ? originEstimate.usage : localBytesUsed;
-  const quotaBytes = originEstimate ? originEstimate.quota : localQuotaBytes;
-  const usageRatio = bytesUsed / quotaBytes;
+  const indexedDbUsage = Number(originEstimate && originEstimate.usageDetails
+    && originEstimate.usageDetails.indexedDB);
+  const regularBytes = originEstimate
+    ? (Number.isFinite(indexedDbUsage) && indexedDbUsage >= 0 ? indexedDbUsage : originEstimate.usage)
+    : null;
+  const regularRecords = storagePool(regularBytes, originEstimate && originEstimate.quota);
+  const localData = storagePool(localBytesUsed, localQuotaBytes);
+  const supported = regularRecords.supported || localData.supported;
+  const measuredLevels = [regularRecords, localData]
+    .filter((pool) => pool.supported)
+    .map((pool) => pool.level);
+  const level = measuredLevels.reduce((highest, current) => (
+    STORAGE_PRESSURE_RANK[current] > STORAGE_PRESSURE_RANK[highest] ? current : highest
+  ), 'unknown');
+  const bytesUsed = originEstimate ? originEstimate.usage : (localSupported ? localBytesUsed : null);
+  const quotaBytes = originEstimate ? originEstimate.quota : (localSupported ? localQuotaBytes : null);
+  const usageRatio = bytesUsed !== null && quotaBytes !== null ? bytesUsed / quotaBytes : null;
   const localUsageRatio = localSupported ? localBytesUsed / localQuotaBytes : null;
-  const pressureRatio = Math.max(usageRatio, localUsageRatio === null ? 0 : localUsageRatio);
-  const level = storagePressureLevel(pressureRatio);
   return {
-    supported: true,
+    supported,
     bytesUsed,
     quotaBytes,
     usageRatio,
     level,
+    pools: { regularRecords, localData },
     ...(originEstimate ? {
-      indexedDbBytes: Number(originEstimate.usageDetails && originEstimate.usageDetails.indexedDB) || 0,
+      indexedDbBytes: Number.isFinite(indexedDbUsage) && indexedDbUsage >= 0 ? indexedDbUsage : 0,
       localBytesUsed,
       localQuotaBytes: localSupported ? localQuotaBytes : null,
       localUsageRatio,
     } : {}),
     lastWriteFailure,
+  };
+}
+
+const STORAGE_PRESSURE_RANK = Object.freeze({
+  unknown: 0, normal: 1, elevated: 2, warning: 3, critical: 4,
+});
+
+function storagePool(bytesUsed, quotaBytes) {
+  if (bytesUsed === null || bytesUsed === undefined || quotaBytes === null || quotaBytes === undefined) {
+    return { supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown' };
+  }
+  const used = Number(bytesUsed);
+  const quota = Number(quotaBytes);
+  if (!Number.isFinite(used) || used < 0 || !Number.isFinite(quota) || quota <= 0) {
+    return { supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown' };
+  }
+  const usageRatio = used / quota;
+  return {
+    supported: true,
+    bytesUsed: Math.round(used),
+    quotaBytes: Math.round(quota),
+    usageRatio,
+    level: storagePressureLevel(usageRatio),
   };
 }
 

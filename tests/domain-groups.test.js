@@ -8,7 +8,7 @@ const {
   MULTIPLE_DOMAINS_KEY,
   UNKNOWN_DOMAIN_KEY,
   buildDomainGroups,
-} = require('../lib/domain-groups.js');
+} = require('../extension/lib/domain-groups.js');
 
 function result(id, urls) {
   const tabs = urls.map((url, index) => ({
@@ -156,7 +156,7 @@ test('returns an empty list for omitted or non-array input', () => {
 });
 
 test('exports the same API as a browser global without CommonJS', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../lib/domain-groups.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../extension/lib/domain-groups.js'), 'utf8');
   const context = vm.createContext({ URL });
 
   vm.runInContext(source, context);

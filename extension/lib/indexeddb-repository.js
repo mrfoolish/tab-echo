@@ -162,6 +162,23 @@
     return { records, statistics };
   }
 
+  async function scanGenerationFromIndex(index, range, visit) {
+    const request = index.openCursor(range, 'prev');
+    await new Promise((resolve, reject) => {
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) { resolve(); return; }
+        try {
+          visit(clone(cursor.value && cursor.value.event));
+          cursor.continue();
+        } catch (error) {
+          reject(error);
+        }
+      };
+      request.onerror = () => reject(request.error || new Error('IndexedDB cursor failed.'));
+    });
+  }
+
   function createIndexes(store, storeName) {
     const ensureIndex = (name, keyPath, options) => {
       if (!store.indexNames.contains(name)) store.createIndex(name, keyPath, options);
@@ -196,7 +213,16 @@
         database.createObjectStore(METADATA_STORE_NAME, { keyPath: 'storageKey' });
       }
     };
-    return requestResult(request);
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('IndexedDB open failed.'));
+      request.onblocked = () => {
+        const error = new Error('IndexedDB upgrade is blocked by another extension page.');
+        error.code = 'IDB_OPEN_BLOCKED';
+        error.retryable = true;
+        reject(error);
+      };
+    });
   }
 
   function createIndexedDbRecordStore(options = {}) {
@@ -208,7 +234,21 @@
     let databasePromise;
 
     function database() {
-      if (!databasePromise) databasePromise = openDatabase(indexedDbFactory, databaseName);
+      if (!databasePromise) {
+        const opening = openDatabase(indexedDbFactory, databaseName);
+        let activePromise;
+        activePromise = opening.then((db) => {
+          db.onversionchange = () => {
+            db.close();
+            if (databasePromise === activePromise) databasePromise = undefined;
+          };
+          return db;
+        }).catch((error) => {
+          if (databasePromise === activePromise) databasePromise = undefined;
+          throw error;
+        });
+        databasePromise = activePromise;
+      }
       return databasePromise;
     }
 
@@ -315,6 +355,27 @@
       } catch (error) {
         try { transaction.abort(); } catch (_) { /* The transaction may already be inactive. */ }
         try { await done; } catch (_) { /* Preserve the transform or cursor error. */ }
+        throw error;
+      }
+    }
+
+    async function scanGeneration(storeName, mode, generation, visit) {
+      const activeStore = assertStoreName(storeName);
+      if (typeof visit !== 'function') throw new TypeError('visit must be a function.');
+      const db = await database();
+      const transaction = db.transaction(activeStore, 'readonly');
+      const done = transactionDone(transaction);
+      const indexName = activeStore === STORE_NAMES.history
+        ? INDEX_NAMES.modeGenerationClosedAt : INDEX_NAMES.modeGenerationDeletedAt;
+      try {
+        await scanGenerationFromIndex(
+          transaction.objectStore(activeStore).index(indexName),
+          generationTimeRange(mode, generation), visit,
+        );
+        await done;
+      } catch (error) {
+        try { transaction.abort(); } catch (_) { /* The transaction may already be inactive. */ }
+        try { await done; } catch (_) { /* Preserve the visitor or cursor error. */ }
         throw error;
       }
     }
@@ -460,6 +521,7 @@
       readGenerationPage,
       readGenerationRevision,
       resetGeneration,
+      scanGeneration,
       scanGenerationPage,
       setGenerationRevision,
     };
@@ -473,7 +535,9 @@
     STORE_NAMES,
     createIndexedDbRecordStore,
     hostnamesForEvent,
+    openDatabase,
     readGenerationPageFromIndex,
+    scanGenerationFromIndex,
     scanGenerationPageFromIndex,
     recordStorageKey,
     toStoredRecord,

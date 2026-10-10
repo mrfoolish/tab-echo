@@ -16,6 +16,7 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 - 完整页面支持关闭记录、回收站、分页、搜索和设置；关闭记录可按关闭时间或域名查看，按域名查看时批量操作仅作用于当前域名。
 - 弹窗默认展示 10 条结果，可在设置中配置为 1–200 条，适合快速搜索和操作。
 - 支持浅色、深色、跟随系统主题，以及中英文界面。
+- 分别展示常规 IndexedDB 记录与无痕记录/设置数据的存储压力，不把两套无关容量相加。
 - 采用混合清理：先按保存期限清理，再删除超过条数上限的最旧记录；回收站只按期限清理，不受数量限制。
 
 ## 默认保存设置
@@ -41,7 +42,7 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 
 ### 无痕窗口
 
-在 `chrome://extensions` 中打开 Tab Echo 详情并开启**允许在无痕模式下运行**。清单使用 `"incognito": "split"`，Chrome 会为无痕窗口运行独立扩展上下文。关闭记录和回收站严格隔离，偏好设置共享。
+在 `chrome://extensions` 中打开 Tab Echo 详情并开启**允许在无痕模式下运行**。清单使用 `"incognito": "split"`，Chrome 会为无痕窗口运行独立扩展上下文。关闭记录和回收站严格隔离，偏好设置共享。常规大列表使用 IndexedDB；无痕记录使用按上下文隔离的持久化本地存储，避免关闭最后一个无痕窗口时被 Chrome 连同无痕 IndexedDB 一起销毁。
 
 ## 数据迁移
 
@@ -49,7 +50,7 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 
 ## 隐私与权限
 
-所有数据只保存在 `chrome.storage.local`。Tab Echo 仅存储关闭事件所需的元数据，例如标题、网址、图标网址、时间戳、顺序和 Group 元数据。扩展不会采集页面内容、表单状态、滚动位置、关闭事件之外的浏览历史或跨设备数据。
+所有数据只保存在浏览器本地：常规记录使用 IndexedDB，无痕记录和共享设置使用 `chrome.storage.local`。Tab Echo 仅存储关闭事件所需的元数据，例如标题、网址、图标网址、时间戳、顺序和 Group 元数据。扩展不会采集页面内容、表单状态、滚动位置、关闭事件之外的浏览历史或跨设备数据。
 
 清单仅申请以下权限：
 
@@ -72,11 +73,12 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 │   │   └── indexeddb-storage-repository.js # 原子切换数据代并兼容原仓储接口
 │   ├── dashboard.html/.css/.js       # 完整关闭记录、回收站与设置页面
 │   ├── popup.html/.css/.js           # 默认 10 条、可配置 1–200 条的紧凑工具栏界面
-│   ├── manifest.json
-│   └── tests/*.test.js               # 逻辑、适配层、界面与文档契约测试
+│   └── manifest.json                 # 加载已解压扩展时使用的入口
+├── tests/*.test.js                   # 逻辑、适配层、界面与文档契约测试
 ├── docs/adr/                          # 架构决策记录
 ├── docs/superpowers/plans/            # 实施计划
 ├── docs/testing/                      # 人工验收清单
+├── package.json                       # 无第三方依赖的测试与校验命令
 ├── CONTEXT.md                         # 领域词汇
 ├── proposal.md                        # 已确认产品规格
 ├── README.md
@@ -87,8 +89,10 @@ Tab Echo 是一个本地优先的 Chrome 已关闭标签页工具，用于查找
 扩展使用原生 Manifest V3 JavaScript，不需要构建步骤。运行全部自动化测试：
 
 ```bash
-node --test extension/tests/*.test.js
+npm test
 ```
+
+运行 `npm run check` 可检查 JavaScript 语法、扩展清单和补丁格式。
 
 ## 开源协议
 

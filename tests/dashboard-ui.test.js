@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const { buildSearchResults } = require('../lib/history-store.js');
+const { buildSearchResults } = require('../extension/lib/history-store.js');
 
-const extensionRoot = path.resolve(__dirname, '..');
+const extensionRoot = path.resolve(__dirname, '../extension');
 const paths = {
   html: path.join(extensionRoot, 'dashboard.html'),
   css: path.join(extensionRoot, 'dashboard.css'),
@@ -61,6 +61,31 @@ test('dashboard declares localized navigation, search, status, paging, and setti
   assert.match(html, /<script src="dashboard.js"><\/script>/);
   assert.doesNotMatch(html, /on(?:click|change|input|submit)=/i);
   assert.doesNotMatch(html, /<style|<script(?! src)/i);
+});
+
+test('storage formatting is compact and localized', () => {
+  assert.equal(helpers.formatStorageBytes(0, 'en'), '0 B');
+  assert.equal(helpers.formatStorageBytes(1536, 'en'), '1.5 KB');
+  assert.equal(helpers.formatStorageBytes(10 * 1024 * 1024, 'zh'), '10 MB');
+  assert.equal(helpers.formatStoragePercent(0.004, 'en'), 'Less than 1%');
+  assert.equal(helpers.formatStoragePercent(0.9, 'zh'), '90%');
+});
+
+test('storage pressure panel separates regular records from local incognito and settings data', () => {
+  const headingIndex = html.indexOf('data-i18n="retentionSection"');
+  const panelIndex = html.indexOf('id="storageHealthPanel"');
+  const retentionInputsIndex = html.indexOf('class="settings-section settings-retention"');
+  assert.ok(headingIndex >= 0 && panelIndex > headingIndex && retentionInputsIndex > panelIndex);
+  for (const id of [
+    'storageHealthTitle', 'storageHealthStatus', 'regularStoragePool', 'regularStorageLabel',
+    'regularStorageValue', 'regularStorageProgress', 'localStoragePool', 'localStorageLabel',
+    'localStorageValue', 'localStorageProgress', 'storageWriteWarning',
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /id="storageHealthPanel"[^>]+aria-labelledby="storageHealthTitle"/);
+  assert.match(css, /\.storage-health\[data-level="(?:elevated|warning)"\]/);
+  assert.match(css, /\.storage-health\[data-level="critical"\]/);
+  assert.match(css, /progress::-webkit-progress-value[^}]*background:\s*var\(--accent\)/s);
+  assert.doesNotMatch(css, /progress::-webkit-progress-value[^}]*var\(--success\)/s);
 });
 
 test('Dashboard renders the localized migration notice before acknowledging it once', async () => {
@@ -138,6 +163,57 @@ test('Dashboard VM keeps the migration banner hidden and unacknowledged when set
   assert.equal(messages.some((message) => message.type === 'acknowledge-migration-notice'), false);
 });
 
+test('Settings storage health loads independently and refreshes after a successful save', async () => {
+  const listeners = {}; const nodes = new Map(); const messages = [];
+  function node(id = '') {
+    if (nodes.has(id)) return nodes.get(id);
+    const value = { id, dataset: {}, hidden: false, disabled: false, value: '', textContent: '', children: [], elements: {},
+      classList: { toggle() {} }, addEventListener(type, handler) { listeners[`${id}:${type}`] = handler; },
+      setAttribute() {}, removeAttribute() {}, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; },
+      querySelectorAll() { return []; }, closest() { return { hidden: false }; }, focus() {}, setCustomValidity() {},
+    }; nodes.set(id, value); return value;
+  }
+  const form = node('settingsForm');
+  form.elements = Object.fromEntries(['maxRecords', 'maxAgeDays', 'trashMaxAgeDays', 'popupSize', 'language', 'theme', 'excludedDomains']
+    .map((name) => [name, node(name)]));
+  const document = { documentElement: { dataset: {} }, title: '', getElementById: node, querySelectorAll() { return []; },
+    addEventListener(type, handler) { listeners[`document:${type}`] = handler; }, createElement() { return node(); }, createTextNode(value) { return { value }; } };
+  const settings = { maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10, pageSize: 50, excludedDomains: [], language: 'zh', theme: 'system' };
+  const health = { ok: true, level: 'warning', lastWriteFailure: null, pools: {
+    regularRecords: { supported: true, bytesUsed: 2 * 1024 * 1024, quotaBytes: 100 * 1024 * 1024, usageRatio: 0.02, level: 'normal' },
+    localData: { supported: true, bytesUsed: 9 * 1024 * 1024, quotaBytes: 10 * 1024 * 1024, usageRatio: 0.9, level: 'warning' },
+  } };
+  const context = { document, URL, URLSearchParams, Event, setTimeout, clearTimeout,
+    location: { search: '?view=settings', pathname: '/dashboard.html' }, history: { replaceState() {}, pushState() {} },
+    addEventListener(type, handler) { listeners[`window:${type}`] = handler; }, chrome: { runtime: { async sendMessage(message) {
+      messages.push(structuredClone(message));
+      if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
+      if (message.type === 'get-settings') return { ok: true, mode: 'normal', settings };
+      if (message.type === 'get-storage-health') return health;
+      if (message.type === 'get-migration-notice') return { ok: true, notice: null };
+      if (message.type === 'preview-settings-impact') return { ok: true, settings, impact: {} };
+      if (message.type === 'save-settings') return { ok: true, settings };
+      return { ok: true };
+    } }, storage: { session: { async get() { return {}; }, async set() {} } } } };
+  context.globalThis = context; vm.runInNewContext(js, context);
+  await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(node('saveSettingsButton').disabled, false);
+  assert.equal(node('regularStorageValue').textContent, '2% · 已用 2 MB / 共 100 MB');
+  assert.equal(node('localStorageValue').textContent, '90% · 已用 9 MB / 共 10 MB');
+  assert.equal(messages.filter((message) => message.type === 'get-storage-health').length, 1);
+
+  await listeners['settingsForm:submit']({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(messages.filter((message) => message.type === 'get-storage-health').length, 2);
+});
+
+test('Settings remain usable when storage health cannot be measured', async () => {
+  assert.match(js, /refreshStorageHealth\(\);[\s\S]*sendMessage\(\{ type: 'get-settings' \}\)/);
+  assert.match(js, /catch \(_\) \{[\s\S]*renderStorageHealth\(null\)/);
+  assert.doesNotMatch(js, /Promise\.all\([^)]*get-storage-health/);
+});
+
 test('URL state accepts only known views and normalizes pagination', () => {
   assert.deepEqual(helpers.parseUrlState('?view=trash&q=needle&page=3&pageSize=100'), {
     view: 'trash', query: 'needle', page: 3, pageSize: 100,
@@ -195,7 +271,7 @@ test('runtime uses background result counts, complete-event bulk operations, and
   assert.match(js, /eventIds:\s*selection\.eventIds/);
   assert.match(js, /type:\s*'move-to-trash',\s*all:\s*true/);
   assert.match(js, /type:\s*'move-to-trash',\s*all:\s*true,\s*query/);
-  assert.match(js, /type:\s*'get-history',\s*query:\s*requestedQuery,\s*offset:\s*requestOffset,\s*limit:\s*requestLimit/);
+  assert.match(js, /type:\s*'get-history',\s*query:\s*requestedQuery,\s*offset:\s*requestOffset,\s*limit:\s*state\.pageSize/);
   assert.match(js, /settingsRequestToken/);
   assert.match(js, /data\.token/);
   assert.match(js, /popstate/);
@@ -308,24 +384,22 @@ test('remembered view is isolated by regular or incognito context', () => {
   assert.ok(js.includes('`${UI_STATE_KEY}:${state.mode}`'));
 });
 
-test('history offers list and domain layouts backed by extension modules', () => {
+test('history offers server-aggregated domain layouts and extension-owned time formatting', () => {
   assert.match(html, /id="historyLayoutToggle"[^>]+role="group"/);
   assert.match(html, /data-history-layout="list"/);
   assert.match(html, /data-history-layout="domain"/);
   assert.match(html, /id="domainHistoryView"/);
   assert.match(html, /id="domainIndex"/);
   assert.match(html, /id="domainHistoryList"/);
-  assert.ok(html.indexOf('lib/domain-groups.js') < html.indexOf('dashboard.js'));
   assert.ok(html.indexOf('lib/time-format.js') < html.indexOf('dashboard.js'));
-  assert.match(js, /root\.TabEchoDomainGroups/);
-  assert.match(js, /domainGroups\.buildDomainGroups/);
+  assert.match(js, /data\.domainGroups/);
   assert.match(js, /root\.TabEchoTimeFormat/);
   assert.match(js, /timeFormat\.formatRelativeTime/);
   assert.match(js, /timeFormat\.formatFullTime/);
   assert.match(js, /moveDomainRecords/);
   assert.match(js, /eventIds:\s*scoped\.eventIds/);
   assert.match(js, /commit-destructive-action/);
-  assert.match(js, /selected \? getResultSelection\(selected\.results\)/);
+  assert.match(js, /eventIds:\s*data\.domainEventIds/);
 });
 
 test('domain selection keeps an existing group and otherwise falls back to the first group', () => {
@@ -333,6 +407,33 @@ test('domain selection keeps an existing group and otherwise falls back to the f
   assert.equal(helpers.resolveDomainSelection(groups, 'second.example'), 'second.example');
   assert.equal(helpers.resolveDomainSelection(groups, 'gone.example'), 'first.example');
   assert.equal(helpers.resolveDomainSelection([], 'gone.example'), null);
+});
+
+test('domain keyboard navigation moves only to an existing adjacent item', () => {
+  assert.equal(helpers.resolveAdjacentIndex(1, 3, 1), 2);
+  assert.equal(helpers.resolveAdjacentIndex(1, 3, -1), 0);
+  assert.equal(helpers.resolveAdjacentIndex(0, 3, -1), null);
+  assert.equal(helpers.resolveAdjacentIndex(2, 3, 1), null);
+});
+
+test('domain layout uses one aggregated request and roving arrow-key navigation', () => {
+  assert.match(js, /type:\s*'get-history-by-domain'/);
+  assert.doesNotMatch(js, /while \(offset < Number\(response\.statistics/);
+  assert.match(js, /button\.tabIndex = group\.key === state\.selectedDomain \? 0 : -1/);
+  assert.match(js, /elements\.domainIndex\.addEventListener\('keydown'/);
+  assert.match(js, /event\.key === 'ArrowDown'/);
+  assert.match(js, /event\.key === 'ArrowUp'/);
+  assert.match(js, /state\.historyLayout === 'domain' && result && result\.ok\) focusSelectedDomain\(\)/);
+  assert.match(js, /scrollIntoView\(\{ block: 'nearest', inline: 'nearest' \}\)/);
+});
+
+test('both full-page page-size controls are the rightmost pager item', () => {
+  for (const id of ['pagination', 'trashPagination']) {
+    const footer = html.match(new RegExp(`<footer id="${id}"[\\s\\S]*?<\\/footer>`))[0];
+    assert.ok(footer.indexOf('Summary') < footer.indexOf('PageButton'));
+    assert.ok(footer.indexOf('PageButton') < footer.indexOf('<label>'));
+  }
+  assert.doesNotMatch(css, /\.pager label\s*\{[^}]*margin-right:\s*auto/s);
 });
 
 test('domain layout persists with the dashboard view per browsing context', () => {
@@ -480,7 +581,7 @@ test('browser UMD passes its root to the factory and starts in a browser-like VM
   assert.ok(context.TabEchoDashboard);
   assert.equal(typeof listeners['dashboardNav:click'], 'function');
   assert.equal(typeof listeners['window:popstate'], 'function');
-  assert.deepEqual(messages.map((message) => message.type), ['get-migration-notice', 'get-settings', 'get-current-mode', 'get-settings']);
+  assert.deepEqual(messages.map((message) => message.type), ['get-migration-notice', 'get-settings', 'get-current-mode', 'get-storage-health', 'get-settings']);
 });
 
 test('browser VM guards stale Trash actions, restores explicit ids, and Empty Trash uses inline confirmation', async () => {
@@ -830,7 +931,7 @@ test('bulk destructive actions use inline confirmation instead of native dialogs
   assert.match(js, /commit-destructive-action', token:\s*pending\.token/);
   assert.match(js, /elements\.emptyTrash\.addEventListener\('click', showTrashEmptyConfirmation\)/);
   assert.match(js, /clearDestructiveConfirmation\(\);\s*state\.historyLayout = button\.dataset\.historyLayout/);
-  assert.match(js, /clearDestructiveConfirmation\(\); state\.selectedDomain = button\.dataset\.domainKey/);
+  assert.match(js, /selectDomain\(button\.dataset\.domainKey\)/);
 });
 
 test('dashboard keeps long addresses separate from always-visible relative times', () => {

@@ -59,12 +59,12 @@
             <section id="domainHistoryList" class="history-list" role="list" aria-label="Selected domain closed tabs"></section>
           </section>
           <footer id="pagination" class="pager" aria-label="History pagination">
-            <label><span data-i18n="perPage">Per page</span>
-              <select id="pageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select>
-            </label>
             <span id="pageSummary" aria-live="polite">Page 1 of 1</span>
             <button id="prevPageButton" type="button" class="secondary-button" data-i18n="previous">Previous</button>
             <button id="nextPageButton" type="button" class="secondary-button" data-i18n="next">Next</button>
+            <label><span data-i18n="perPage">Per page</span>
+              <select id="pageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select>
+            </label>
           </footer>
         </section>
 
@@ -82,10 +82,10 @@
           </div>
           <section id="trashList" class="history-list" role="list" aria-label="Trash" aria-busy="true" tabindex="-1"><div class="loading-state"><span></span><span></span><span></span></div></section>
           <footer id="trashPagination" class="pager" aria-label="Trash pagination">
-            <label><span data-i18n="perPage">Per page</span><select id="trashPageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
             <span id="trashPageSummary" aria-live="polite">Page 1 of 1</span>
             <button id="trashPrevPageButton" type="button" class="secondary-button" data-i18n="previous">Previous</button>
             <button id="trashNextPageButton" type="button" class="secondary-button" data-i18n="next">Next</button>
+            <label><span data-i18n="perPage">Per page</span><select id="trashPageSizeSelect"><option value="25">25</option><option value="50" selected>50</option><option value="100">100</option></select></label>
           </footer>
         </section>
 
@@ -93,6 +93,25 @@
           <div class="view-heading"><div><h1 id="settingsTitle" data-i18n="settings">Settings</h1><p id="settingsSummary" data-i18n="settingsIntro">Control retention for this extension.</p></div></div>
           <form id="settingsForm" class="settings-form" aria-busy="true">
             <h2 data-i18n="retentionSection">Storage and cleanup</h2>
+            <section id="storageHealthPanel" class="storage-health" aria-labelledby="storageHealthTitle" data-level="unknown">
+              <div class="storage-health-heading">
+                <strong id="storageHealthTitle" data-i18n="storageHealthTitle">Storage pressure</strong>
+                <span id="storageHealthStatus" data-i18n="storageUnknown">Unavailable</span>
+              </div>
+              <div class="storage-pool-grid">
+                <div id="regularStoragePool" class="storage-pool">
+                  <span id="regularStorageLabel" data-i18n="regularStorageLabel">Regular closed records</span>
+                  <span id="regularStorageValue" data-i18n="storageUnavailable">Capacity unavailable</span>
+                  <progress id="regularStorageProgress" max="1" hidden></progress>
+                </div>
+                <div id="localStoragePool" class="storage-pool">
+                  <span id="localStorageLabel" data-i18n="localStorageLabel">Incognito records and settings</span>
+                  <span id="localStorageValue" data-i18n="storageUnavailable">Capacity unavailable</span>
+                  <progress id="localStorageProgress" max="1" hidden></progress>
+                </div>
+              </div>
+              <p id="storageWriteWarning" data-i18n="storageWriteWarning" hidden>A recent storage write failed.</p>
+            </section>
             <div class="settings-section settings-retention">
             <label for="maxRecordsInput"><span data-i18n="maxRecords">Maximum records</span><input id="maxRecordsInput" name="maxRecords" type="text" inputmode="numeric" autocomplete="off" placeholder="10000" aria-describedby="maxRecordsHelp maxRecordsError"><small id="maxRecordsHelp" data-i18n="maxRecordsHelp">Blank means unlimited, and browser storage limits still apply.</small><small id="maxRecordsError" class="field-error" role="status" aria-live="polite"></small></label>
             <label for="maxAgeDaysInput"><span data-i18n="maxAgeDays">History retention (days)</span><input id="maxAgeDaysInput" name="maxAgeDays" type="text" inputmode="numeric" autocomplete="off" aria-describedby="maxAgeHelp maxAgeDaysError"><small id="maxAgeHelp" data-i18n="maxAgeHelp">Blank means kept indefinitely, and browser storage limits still apply.</small><small id="maxAgeDaysError" class="field-error" role="status" aria-live="polite"></small></label>
@@ -127,7 +146,6 @@
         </section>
       </main>
     </div>
-    <script src="lib/domain-groups.js"></script>
     <script src="lib/time-format.js"></script>
     <script src="dashboard.js"></script>
   </body>

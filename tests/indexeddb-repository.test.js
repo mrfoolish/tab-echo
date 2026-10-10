@@ -8,11 +8,60 @@ const {
   STORE_NAMES,
   createIndexedDbRecordStore,
   hostnamesForEvent,
+  openDatabase,
   readGenerationPageFromIndex,
   recordStorageKey,
+  scanGenerationFromIndex,
   scanGenerationPageFromIndex,
   toStoredRecord,
-} = require('../lib/indexeddb-repository.js');
+} = require('../extension/lib/indexeddb-repository.js');
+
+function revisionDatabase(revision) {
+  let closed = 0;
+  const database = {
+    get closed() { return closed; },
+    close() { closed += 1; },
+    transaction() {
+      const transaction = {
+        objectStore() {
+          return {
+            get() {
+              const request = {};
+              queueMicrotask(() => { request.result = { revision }; request.onsuccess(); });
+              return request;
+            },
+          };
+        },
+      };
+      queueMicrotask(() => transaction.oncomplete());
+      return transaction;
+    },
+  };
+  return database;
+}
+
+function openFactory(outcomes) {
+  let calls = 0;
+  return {
+    get calls() { return calls; },
+    open() {
+      const request = {};
+      const outcome = outcomes[calls++];
+      queueMicrotask(() => {
+        if (outcome instanceof Error) {
+          request.error = outcome;
+          request.onerror();
+        } else if (outcome === 'blocked') {
+          if (request.onblocked) request.onblocked();
+        } else {
+          request.result = outcome;
+          request.onsuccess();
+        }
+      });
+      return request;
+    },
+  };
+}
 
 test('IndexedDB schema names are stable and versioned', () => {
   assert.equal(DATABASE_NAME, 'tab-echo-records');
@@ -66,6 +115,47 @@ test('record metadata keeps exact lower-case hostnames without mutating events',
 test('record store fails explicitly when IndexedDB is unavailable', async () => {
   const store = createIndexedDbRecordStore({ indexedDB: null });
   await assert.rejects(store.readGeneration('history', 'normal', 'generation-1'), /unavailable/);
+});
+
+test('a blocked database upgrade rejects with a retryable stable error', async () => {
+  const factory = openFactory(['blocked']);
+  const opened = openDatabase(factory, 'blocked-database');
+  const bounded = Promise.race([
+    opened,
+    new Promise((_, reject) => queueMicrotask(() => reject(new Error('blocked open did not reject')))),
+  ]);
+
+  await assert.rejects(bounded, (error) => error && error.code === 'IDB_OPEN_BLOCKED');
+});
+
+test('record store retries a transient database open failure in the same worker', async () => {
+  const database = revisionDatabase(7);
+  const factory = openFactory([new Error('transient open failure'), database]);
+  const store = createIndexedDbRecordStore({
+    indexedDB: factory,
+    IDBKeyRange: { only(value) { return value; }, bound(left, right) { return [left, right]; } },
+  });
+
+  await assert.rejects(store.readGenerationRevision('normal', 'generation-1'), /transient open failure/);
+  assert.equal(await store.readGenerationRevision('normal', 'generation-1'), 7);
+  assert.equal(factory.calls, 2);
+});
+
+test('version changes close the stale connection and reopen on the next operation', async () => {
+  const first = revisionDatabase(1);
+  const second = revisionDatabase(2);
+  const factory = openFactory([first, second]);
+  const store = createIndexedDbRecordStore({
+    indexedDB: factory,
+    IDBKeyRange: { only(value) { return value; }, bound(left, right) { return [left, right]; } },
+  });
+
+  assert.equal(await store.readGenerationRevision('normal', 'generation-1'), 1);
+  assert.equal(typeof first.onversionchange, 'function');
+  first.onversionchange();
+  assert.equal(first.closed, 1);
+  assert.equal(await store.readGenerationRevision('normal', 'generation-1'), 2);
+  assert.equal(factory.calls, 2);
 });
 
 test('generation pages use a descending cursor without loading the full collection', async () => {
@@ -135,4 +225,35 @@ test('generation scans keep only the requested matching page while counting the 
   assert.deepEqual(page.statistics, {
     totalRecords: 3, totalTabs: 4, matchingRecords: 2, matchingTabs: 2, resultTabs: 2,
   });
+});
+
+test('generation visitor scans records once in descending time order', async () => {
+  const source = [
+    { event: { id: 'newest' } },
+    { event: { id: 'middle' } },
+    { event: { id: 'oldest' } },
+  ];
+  let cursorCount = 0;
+  const index = {
+    openCursor(_range, direction) {
+      assert.equal(direction, 'prev');
+      const request = {}; let position = -1;
+      const dispatch = () => {
+        position += 1;
+        request.result = position < source.length ? {
+          value: source[position], continue() { queueMicrotask(dispatch); },
+        } : null;
+        if (request.result) cursorCount += 1;
+        request.onsuccess();
+      };
+      queueMicrotask(dispatch);
+      return request;
+    },
+  };
+  const visited = [];
+
+  await scanGenerationFromIndex(index, 'range', (event) => visited.push(event.id));
+
+  assert.deepEqual(visited, ['newest', 'middle', 'oldest']);
+  assert.equal(cursorCount, 3);
 });

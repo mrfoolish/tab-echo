@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const root = path.resolve(__dirname, '../..');
+const root = path.resolve(__dirname, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -49,17 +49,34 @@ test('English and Chinese READMEs document the shipped product contract', () => 
   for (const required of [
     'README.zh.md', '10', '10,000', '3 days', 'unlimited', 'Trash',
     'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
-    'node --test extension/tests/*.test.js', 'alarms', 'storage', 'tabs',
+    'npm test', 'npm run check', 'alarms', 'storage', 'tabs',
     'Allow in Incognito', 'split', 'migration', 'confirmation',
   ]) assert.match(en, new RegExp(escapeRegExp(required), 'i'), `README.md must mention ${required}`);
   for (const required of [
     'README.md', '10', '10,000', '3 天', '不限制', '回收站',
     'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
-    'node --test extension/tests/*.test.js', 'alarms', 'storage', 'tabs',
+    'npm test', 'npm run check', 'alarms', 'storage', 'tabs',
     '允许在无痕模式下运行', 'split', '迁移', '页面内二阶段确认',
   ]) assert.match(zh, new RegExp(escapeRegExp(required), 'i'), `README.zh.md must mention ${required}`);
   assert.doesNotMatch(en, /Restore (?:one|a|the|grouped).*tab/i);
   assert.doesNotMatch(zh, /恢复(?:单个|一组|标签页|网页)|普通模式|当前模式|按标题或 URL/);
+});
+
+test('package scripts expose dependency-free test and check commands', () => {
+  const pkg = JSON.parse(read('package.json'));
+  assert.equal(pkg.private, true);
+  assert.equal(pkg.scripts.test, 'node --test tests/*.test.js');
+  assert.match(pkg.scripts.check, /check:js/);
+  assert.match(pkg.scripts.check, /check:manifest/);
+});
+
+test('product docs describe separate storage pools without a combined quota', () => {
+  const en = read('README.md');
+  const zh = read('README.zh.md');
+  assert.match(en, /regular IndexedDB records and local incognito\/settings data/i);
+  assert.match(en, /without combining their unrelated quotas/i);
+  assert.match(zh, /常规 IndexedDB 记录与无痕记录\/设置数据/);
+  assert.match(zh, /不把两套无关容量相加/);
 });
 
 test('manifest keeps context isolation and uses only documented permissions', () => {

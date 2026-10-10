@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const extensionRoot = path.resolve(__dirname, '..');
+const extensionRoot = path.resolve(__dirname, '../extension');
 const html = fs.readFileSync(path.join(extensionRoot, 'popup.html'), 'utf8');
 const css = fs.readFileSync(path.join(extensionRoot, 'popup.css'), 'utf8');
 const js = fs.readFileSync(path.join(extensionRoot, 'popup.js'), 'utf8');

@@ -226,7 +226,47 @@
       };
     }
 
-    return { migrateMode };
+    async function restoreModeToLegacy(rawMode) {
+      const mode = assertMode(rawMode);
+      const requestedKeys = [KEYS.marker[mode], KEYS.generation[mode], KEYS.revision[mode]];
+      const current = await storageArea.get(requestedKeys);
+      const marker = readValue(current, KEYS.marker[mode]);
+      const generation = readValue(current, KEYS.generation[mode]);
+      if (!marker || marker.version !== MIGRATION_VERSION || marker.status !== 'complete'
+        || typeof generation !== 'string' || !generation) {
+        return { restored: false };
+      }
+
+      const [storedHistory, storedTrash, generationRevision] = await Promise.all([
+        recordStore.readGeneration('history', mode, generation),
+        recordStore.readGeneration('trash', mode, generation),
+        typeof recordStore.readGenerationRevision === 'function'
+          ? recordStore.readGenerationRevision(mode, generation) : null,
+      ]);
+      const history = normalizeHistory(storedHistory, mode).records;
+      const trash = normalizeTrash(storedTrash, mode).records;
+      const markerDescribesGeneration = marker.generation === generation;
+      if (generationRevision === null && markerDescribesGeneration
+        && (history.length !== Number(marker.historyCount) || trash.length !== Number(marker.trashCount))) {
+        throw new Error(`IndexedDB ${mode} recovery count mismatch.`);
+      }
+      if (generationRevision === null && !markerDescribesGeneration) {
+        throw new Error(`IndexedDB ${mode} recovery generation is unavailable.`);
+      }
+
+      const revision = generationRevision === null
+        ? normalizeRevision(readValue(current, KEYS.revision[mode]))
+        : normalizeRevision(generationRevision);
+      await storageArea.set({
+        [KEYS.history[mode]]: history,
+        [KEYS.trash[mode]]: trash,
+        [KEYS.revision[mode]]: revision,
+      });
+      await storageArea.remove([KEYS.marker[mode], KEYS.generation[mode]]);
+      return { restored: true, generation, historyCount: history.length, trashCount: trash.length };
+    }
+
+    return { migrateMode, restoreModeToLegacy };
   }
 
   return {

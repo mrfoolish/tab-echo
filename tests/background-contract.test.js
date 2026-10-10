@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const extensionDir = path.join(__dirname, '..');
+const extensionDir = path.join(__dirname, '../extension');
 
 test('manifest grants the alarms permission', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionDir, 'manifest.json'), 'utf8'));
@@ -108,9 +108,10 @@ async function loadBackground({ incognito = false, localInitial = {}, localArea,
     clearTimeout, setTimeout, structuredClone, URL, console: { error() {} }, chrome, importScripts() {},
     ...(storageEstimate ? { navigator: { storage: { estimate: storageEstimate } } } : {}),
     self: {
-      TabEchoHistoryStore: require('../lib/history-store.js'),
-      TabEchoStorageRepository: require('../lib/storage-repository.js'),
-      TabEchoCloseTracker: require('../lib/close-tracker.js'),
+      TabEchoHistoryStore: require('../extension/lib/history-store.js'),
+      TabEchoDomainGroups: require('../extension/lib/domain-groups.js'),
+      TabEchoStorageRepository: require('../extension/lib/storage-repository.js'),
+      TabEchoCloseTracker: require('../extension/lib/close-tracker.js'),
     },
   };
   vm.runInNewContext(fs.readFileSync(path.join(extensionDir, 'background.js'), 'utf8'), context, {
@@ -142,7 +143,7 @@ test('initialization and lifecycle hooks ensure the fixed daily cleanup alarm', 
 
 test('startup records locally mirrored window snapshots lost during a forced Chrome exit', async () => {
   const trackerKey = 'tabEcho:close-tracker:normal:v1';
-  const tracker = require('../lib/close-tracker.js').createCloseTracker({
+  const tracker = require('../extension/lib/close-tracker.js').createCloseTracker({
     mode: 'normal', now: () => 1700000000000,
   });
   tracker.hydrate([
@@ -163,7 +164,7 @@ test('startup records locally mirrored window snapshots lost during a forced Chr
 
 test('browser restart archives old snapshots before hydrating a reused Chrome window id', async () => {
   const trackerKey = 'tabEcho:close-tracker:normal:v1';
-  const tracker = require('../lib/close-tracker.js').createCloseTracker({
+  const tracker = require('../extension/lib/close-tracker.js').createCloseTracker({
     mode: 'normal', now: () => 1700000000000,
   });
   tracker.hydrate([
@@ -183,7 +184,7 @@ test('browser restart archives old snapshots before hydrating a reused Chrome wi
 
 test('extension reload does not archive durable snapshots that still match live tabs', async () => {
   const trackerKey = 'tabEcho:close-tracker:normal:v1';
-  const tracker = require('../lib/close-tracker.js').createCloseTracker({
+  const tracker = require('../extension/lib/close-tracker.js').createCloseTracker({
     mode: 'normal', now: () => 1700000000000,
   });
   const tabs = [
@@ -198,6 +199,29 @@ test('extension reload does not archive durable snapshots that still match live 
 
   assert.deepEqual(subject.local.values[keys.normalHistory] || [], []);
   assert.deepEqual(subject.local.values[trackerKey].windowSnapshotsById['10'].tabIds, ['1']);
+});
+
+test('window-closing tab removals reuse the durable window snapshot without per-tab tracker writes', async () => {
+  const trackerKey = 'tabEcho:close-tracker:normal:v1';
+  const tabs = [
+    { id: 1, windowId: 10, index: 0, incognito: false, title: 'One', url: 'https://one.example/' },
+    { id: 2, windowId: 10, index: 1, incognito: false, title: 'Two', url: 'https://two.example/' },
+    { id: 3, windowId: 10, index: 2, incognito: false, title: 'Three', url: 'https://three.example/' },
+  ];
+  const subject = await loadBackground({ tabs });
+  const baselineWrites = subject.local.writes.filter((items) => Object.hasOwn(items, trackerKey)).length;
+
+  subject.events.removed.listeners[0](1, { windowId: 10, isWindowClosing: true });
+  subject.events.removed.listeners[0](2, { windowId: 10, isWindowClosing: true });
+  subject.events.removed.listeners[0](3, { windowId: 10, isWindowClosing: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    subject.local.writes.filter((items) => Object.hasOwn(items, trackerKey)).length,
+    baselineWrites,
+  );
+  assert.deepEqual(subject.local.values[trackerKey].windowSnapshotsById['10'].tabIds, ['1', '2', '3']);
 });
 
 test('message mutations use only the trusted active partition and query all moves underlying events', async () => {
@@ -358,6 +382,36 @@ test('history list protocol returns only the requested page with full matching s
   assert.deepEqual(structuredClone(result.pagination), { offset: 1, limit: 1, hasMore: true });
 });
 
+test('domain history protocol returns one selected page and complete selected ids', async () => {
+  const alphaOld = entry('alpha-old', 'normal', [
+    { id: 'alpha-old-tab', title: 'Alpha old', url: 'https://alpha.example/old' },
+  ], { closedAt: 1 });
+  const beta = entry('beta', 'normal', [
+    { id: 'beta-tab', title: 'Beta', url: 'https://beta.example/' },
+  ], { closedAt: 2 });
+  const alphaNew = entry('alpha-new', 'normal', [
+    { id: 'alpha-new-tab', title: 'Alpha new', url: 'https://alpha.example/new' },
+  ], { closedAt: 3 });
+  const subject = await loadBackground({
+    localInitial: { [keys.normalHistory]: [alphaOld, beta, alphaNew] },
+  });
+
+  const result = await subject.message({
+    type: 'get-history-by-domain', domain: 'alpha.example', offset: 1, limit: 1,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(structuredClone(result.groups), [
+    { key: 'alpha.example', domain: 'alpha.example', label: 'alpha.example', eventCount: 2, tabCount: 2 },
+    { key: 'beta.example', domain: 'beta.example', label: 'beta.example', eventCount: 1, tabCount: 1 },
+  ]);
+  assert.equal(result.selectedDomain, 'alpha.example');
+  assert.deepEqual(structuredClone(result.results.map((item) => item.event.id)), ['alpha-old']);
+  assert.deepEqual(structuredClone(result.eventIds), ['alpha-new', 'alpha-old']);
+  assert.equal(result.statistics.selectedRecords, 2);
+  assert.equal(result.pagination.hasMore, false);
+});
+
 test('reopen-tab uses the current window while reopen-event opens a group in a new window in source order', async () => {
   const group = entry('group', 'normal', [
     { id: 'first', title: 'First', url: 'https://first.example/' },
@@ -497,6 +551,10 @@ test('storage health reports quota pressure levels without loading record arrays
   assert.equal(health.quotaBytes, quotaBytes);
   assert.equal(health.level, 'warning');
   assert.ok(health.usageRatio >= 0.85 && health.usageRatio < 0.95);
+  assert.deepEqual(structuredClone(health.pools.regularRecords), {
+    supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown',
+  });
+  assert.equal(health.pools.localData.level, 'warning');
   assert.equal(local.reads, baselineReads);
 
   for (const [ratio, level] of [[0.69, 'normal'], [0.70, 'elevated'], [0.85, 'warning'], [0.95, 'critical']]) {
@@ -520,6 +578,10 @@ test('storage health explicitly reports unsupported byte accounting', async () =
     quotaBytes: null,
     usageRatio: null,
     level: 'unknown',
+    pools: {
+      regularRecords: { supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown' },
+      localData: { supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown' },
+    },
     lastWriteFailure: null,
   });
 });
@@ -528,11 +590,11 @@ test('storage health includes IndexedDB usage and reports the highest storage pr
   const localQuotaBytes = 10 * 1024 * 1024;
   const originQuotaBytes = 100 * 1024 * 1024;
   const subject = await loadBackground({
-    localArea: memoryArea({}, { bytesInUse: Math.round(localQuotaBytes * 0.20), quotaBytes: localQuotaBytes }),
+    localArea: memoryArea({}, { bytesInUse: Math.round(localQuotaBytes * 0.90), quotaBytes: localQuotaBytes }),
     storageEstimate: async () => ({
       usage: Math.round(originQuotaBytes * 0.86),
       quota: originQuotaBytes,
-      usageDetails: { indexedDB: 70 * 1024 * 1024 },
+      usageDetails: { indexedDB: 2 * 1024 * 1024 },
     }),
   });
 
@@ -541,9 +603,39 @@ test('storage health includes IndexedDB usage and reports the highest storage pr
   assert.equal(health.ok, true);
   assert.equal(health.bytesUsed, Math.round(originQuotaBytes * 0.86));
   assert.equal(health.quotaBytes, originQuotaBytes);
-  assert.equal(health.indexedDbBytes, 70 * 1024 * 1024);
+  assert.equal(health.indexedDbBytes, 2 * 1024 * 1024);
   assert.equal(health.localQuotaBytes, localQuotaBytes);
   assert.equal(health.level, 'warning');
+  assert.deepEqual(structuredClone(health.pools.regularRecords), {
+    supported: true,
+    bytesUsed: 2 * 1024 * 1024,
+    quotaBytes: originQuotaBytes,
+    usageRatio: 0.02,
+    level: 'normal',
+  });
+  assert.deepEqual(structuredClone(health.pools.localData), {
+    supported: true,
+    bytesUsed: 9 * 1024 * 1024,
+    quotaBytes: localQuotaBytes,
+    usageRatio: 0.9,
+    level: 'warning',
+  });
+});
+
+test('storage health can report regular records when local byte accounting is unavailable', async () => {
+  const originQuotaBytes = 100 * 1024 * 1024;
+  const subject = await loadBackground({
+    storageEstimate: async () => ({ usage: 7 * 1024 * 1024, quota: originQuotaBytes }),
+  });
+
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.equal(health.supported, true);
+  assert.equal(health.pools.regularRecords.supported, true);
+  assert.equal(health.pools.regularRecords.bytesUsed, 7 * 1024 * 1024);
+  assert.deepEqual(structuredClone(health.pools.localData), {
+    supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown',
+  });
 });
 
 test('Popup acknowledgement consumes the shared notice before Dashboard reads from the other mode', async () => {

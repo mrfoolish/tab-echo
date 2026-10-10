@@ -5,7 +5,7 @@ const {
   KEYS,
   createIndexedDbMigration,
   createYieldControl,
-} = require('../lib/indexeddb-migration.js');
+} = require('../extension/lib/indexeddb-migration.js');
 
 function event(id, mode = 'normal', extra = {}) {
   return {
@@ -60,8 +60,65 @@ function memoryRecordStore(controls = {}) {
       const bucket = values[storeName].get(key(mode, generation)) || [];
       return structuredClone(ordinals.map((ordinal) => bucket[ordinal]).filter(Boolean));
     },
+    async readGeneration(storeName, mode, generation) {
+      return structuredClone(values[storeName].get(key(mode, generation)) || []);
+    },
   };
 }
+
+test('restores a completed incognito generation to durable local arrays before clearing its pointer', async () => {
+  const generation = 'incognito-live-generation';
+  const storage = memoryStorage({
+    [KEYS.marker.incognito]: {
+      version: 1, status: 'complete', mode: 'incognito', generation,
+      historyCount: 2, trashCount: 1, skippedRecords: 0, completedAt: 100,
+    },
+    [KEYS.generation.incognito]: generation,
+    [KEYS.revision.incognito]: 8,
+  });
+  const records = memoryRecordStore();
+  await records.resetGeneration('incognito', generation);
+  await records.putBatch('history', 'incognito', generation, [
+    event('secret-one', 'incognito'), event('secret-two', 'incognito'),
+  ]);
+  await records.putBatch('trash', 'incognito', generation, [
+    event('secret-trash', 'incognito', { deletedAt: 200 }),
+  ]);
+  const migration = createIndexedDbMigration({ storageArea: storage, recordStore: records });
+
+  const result = await migration.restoreModeToLegacy('incognito');
+
+  assert.deepEqual(result, { restored: true, generation, historyCount: 2, trashCount: 1 });
+  assert.deepEqual(storage.values[KEYS.history.incognito].map((item) => item.id), ['secret-one', 'secret-two']);
+  assert.deepEqual(storage.values[KEYS.trash.incognito].map((item) => item.id), ['secret-trash']);
+  assert.equal(storage.values[KEYS.revision.incognito], 8);
+  assert.equal(storage.values[KEYS.marker.incognito], undefined);
+  assert.equal(storage.values[KEYS.generation.incognito], undefined);
+});
+
+test('refuses to clear an incognito pointer when its IndexedDB generation has already disappeared', async () => {
+  const generation = 'missing-incognito-generation';
+  const storage = memoryStorage({
+    [KEYS.marker.incognito]: {
+      version: 1, status: 'complete', mode: 'incognito', generation,
+      historyCount: 2, trashCount: 0, skippedRecords: 0, completedAt: 100,
+    },
+    [KEYS.generation.incognito]: generation,
+  });
+  const migration = createIndexedDbMigration({
+    storageArea: storage,
+    recordStore: memoryRecordStore(),
+  });
+
+  await assert.rejects(
+    migration.restoreModeToLegacy('incognito'),
+    /recovery count mismatch/,
+  );
+
+  assert.equal(storage.values[KEYS.generation.incognito], generation);
+  assert.equal(storage.values[KEYS.marker.incognito].status, 'complete');
+  assert.equal(storage.values[KEYS.history.incognito], undefined);
+});
 
 test('migrates one context, verifies it, switches authority, then removes only its arrays', async () => {
   const storage = memoryStorage({

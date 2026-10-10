@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { createCloseTracker, createTrackerPersistence } = require('../lib/close-tracker.js');
-const { deleteEvent, getRestoreUrls } = require('../lib/history-store.js');
+const { createCloseTracker, createTrackerPersistence } = require('../extension/lib/close-tracker.js');
+const { deleteEvent, getRestoreUrls } = require('../extension/lib/history-store.js');
 
 function tab(id, windowId, index, overrides = {}) {
   return {
@@ -394,13 +394,13 @@ test('consumed window ids expire after the deduplication ttl', () => {
 });
 
 test('background loads tracker and repository and derives its partition from worker context', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
   assert.match(source, /importScripts\(\s*'lib\/history-store\.js',[\s\S]*'lib\/storage-repository\.js',[\s\S]*'lib\/indexeddb-repository\.js',[\s\S]*'lib\/indexeddb-migration\.js',[\s\S]*'lib\/indexeddb-storage-repository\.js',[\s\S]*'lib\/close-tracker\.js'\s*\)/);
   assert.match(source, /chrome\.extension\.inIncognitoContext\s*\?\s*'incognito'\s*:\s*'normal'/);
   assert.match(source, /tabEcho:close-tracker:.*activeMode/);
   assert.match(source, /chrome\.tabs\.onDetached\.addListener/);
   assert.match(source, /chrome\.tabs\.onAttached\.addListener/);
-  assert.match(source, /if \(!result\.ignored && !result\.windowClosing\)[\s\S]*scheduleBatchFlush/);
+  assert.match(source, /if \(!result\.windowClosing\)[\s\S]*if \(!result\.ignored\) scheduleBatchFlush/);
   assert.match(source, /createTrackerPersistence/);
   assert.match(source, /createIndexedDbStorageRepository/);
   assert.doesNotMatch(source, /storage\.local\.set\(\{\s*\[?STORAGE_KEY/);
@@ -549,7 +549,7 @@ test('tracker persistence keeps identical revisions in session and local after a
 });
 
 test('background initialization retries after failure without concurrent duplicate initialization', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
   const listeners = {};
   let migrationAttempts = 0;
   let queryAttempts = 0;
@@ -557,7 +557,8 @@ test('background initialization retries after failure without concurrent duplica
   const context = {
     clearTimeout, setTimeout, structuredClone, console: { error() {} },
     self: {
-      TabEchoHistoryStore: require('../lib/history-store.js'),
+      TabEchoHistoryStore: require('../extension/lib/history-store.js'),
+      TabEchoDomainGroups: require('../extension/lib/domain-groups.js'),
       TabEchoStorageRepository: { createStorageRepository() {
         return {
           async migrateLegacyState() {
@@ -568,7 +569,7 @@ test('background initialization retries after failure without concurrent duplica
           async saveSettings() {},
         };
       } },
-      TabEchoCloseTracker: require('../lib/close-tracker.js'),
+      TabEchoCloseTracker: require('../extension/lib/close-tracker.js'),
     },
     importScripts() {},
     chrome: {

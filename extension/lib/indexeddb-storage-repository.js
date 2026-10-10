@@ -4,6 +4,7 @@
       require('./history-store.js'),
       require('./storage-repository.js'),
       require('./indexeddb-migration.js'),
+      require('./domain-groups.js'),
     );
     return;
   }
@@ -11,10 +12,11 @@
     root.TabEchoHistoryStore,
     root.TabEchoStorageRepository,
     root.TabEchoIndexedDbMigration,
+    root.TabEchoDomainGroups,
   );
 })(typeof globalThis !== 'undefined' ? globalThis : this,
-  function createModule(historyStore, storageModule, migrationModule) {
-    if (!historyStore || !storageModule || !migrationModule) {
+  function createModule(historyStore, storageModule, migrationModule, domainGroups) {
+    if (!historyStore || !storageModule || !migrationModule || !domainGroups) {
       throw new Error('IndexedDB repository dependencies are required.');
     }
 
@@ -82,6 +84,8 @@
 
     function createIndexedDbStorageRepository(storageArea, recordStore, options = {}) {
       const legacyRepository = options.legacyRepository || createStorageRepository(storageArea, options);
+      const indexedModes = new Set(Array.isArray(options.indexedModes)
+        ? options.indexedModes.filter((mode) => MODES.includes(mode)) : MODES);
       const migration = options.migration || createIndexedDbMigration({
         storageArea,
         recordStore,
@@ -108,6 +112,15 @@
       const queues = { normal: Promise.resolve(), incognito: Promise.resolve() };
       let generationSequence = 0;
 
+      function wrapIndexedDbWriteError(operation, error) {
+        if (error && error.code === 'REVISION_CONFLICT') return error;
+        const wrapped = new StorageWriteError(operation, 1, error);
+        wrapped.code = 'STORAGE_WRITE_FAILED';
+        wrapped.causeName = error && typeof error.name === 'string' ? error.name : 'Error';
+        wrapped.retryable = wrapped.causeName !== 'QuotaExceededError';
+        return wrapped;
+      }
+
       async function readMetadata(mode) {
         const result = await storageArea.get([
           STORAGE_KEYS.settings,
@@ -118,7 +131,7 @@
         ]);
         const generation = readValue(result, INDEXEDDB_KEYS.generation[mode]);
         const marker = readValue(result, INDEXEDDB_KEYS.marker[mode]);
-        const indexed = typeof generation === 'string' && generation
+        const indexed = indexedModes.has(mode) && typeof generation === 'string' && generation
           && marker && marker.status === 'complete';
         let revision = normalizeRevision(readValue(result, STORAGE_KEYS.revision[mode]));
         if (indexed && typeof recordStore.readGenerationRevision === 'function') {
@@ -136,81 +149,158 @@
         };
       }
 
+      function sameSnapshot(left, right) {
+        return left.indexed === right.indexed
+          && left.generation === right.generation
+          && left.revision === right.revision
+          && left.settingsRevision === right.settingsRevision;
+      }
+
+      async function readStable(mode, operation) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const metadata = await readMetadata(mode);
+          const value = await operation(metadata);
+          if (!metadata.indexed) return value;
+          const latest = await readMetadata(mode);
+          if (sameSnapshot(metadata, latest)) return value;
+        }
+        const error = new Error('IndexedDB collection changed while it was being read.');
+        error.code = 'READ_CONFLICT';
+        throw error;
+      }
+
       async function readContext(mode) {
         const activeMode = assertMode(mode);
-        const metadata = await readMetadata(activeMode);
-        if (!metadata.indexed) return legacyRepository.readContext(activeMode);
-        const [history, trash] = await Promise.all([
-          recordStore.readGeneration('history', activeMode, metadata.generation),
-          recordStore.readGeneration('trash', activeMode, metadata.generation),
-        ]);
-        return {
-          settings: metadata.settings,
-          history: normalizeHistory(history, activeMode),
-          trash: normalizeTrash(trash, activeMode),
-          revision: metadata.revision,
-          settingsRevision: metadata.settingsRevision,
-        };
+        return readStable(activeMode, async (metadata) => {
+          if (!metadata.indexed) return legacyRepository.readContext(activeMode);
+          const [history, trash] = await Promise.all([
+            recordStore.readGeneration('history', activeMode, metadata.generation),
+            recordStore.readGeneration('trash', activeMode, metadata.generation),
+          ]);
+          return {
+            settings: metadata.settings,
+            history: normalizeHistory(history, activeMode),
+            trash: normalizeTrash(trash, activeMode),
+            revision: metadata.revision,
+            settingsRevision: metadata.settingsRevision,
+          };
+        });
       }
 
       async function readCollection(storeName, mode) {
         const activeMode = assertMode(mode);
-        const metadata = await readMetadata(activeMode);
-        if (!metadata.indexed) {
+        return readStable(activeMode, async (metadata) => {
+          if (!metadata.indexed) {
+            return storeName === 'history'
+              ? legacyRepository.readHistory(activeMode) : legacyRepository.readTrash(activeMode);
+          }
+          const records = await recordStore.readGeneration(storeName, activeMode, metadata.generation);
           return storeName === 'history'
-            ? legacyRepository.readHistory(activeMode) : legacyRepository.readTrash(activeMode);
-        }
-        const records = await recordStore.readGeneration(storeName, activeMode, metadata.generation);
-        return storeName === 'history'
-          ? normalizeHistory(records, activeMode) : normalizeTrash(records, activeMode);
+            ? normalizeHistory(records, activeMode) : normalizeTrash(records, activeMode);
+        });
       }
 
       async function queryCollection(storeName, mode, query, options = {}) {
         const activeMode = assertMode(mode);
-        const metadata = await readMetadata(activeMode);
         const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
         const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
-        if (!metadata.indexed || typeof recordStore.scanGenerationPage !== 'function') {
-          const stored = metadata.indexed
-            ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
-            : (storeName === 'history'
-              ? await legacyRepository.readHistory(activeMode) : await legacyRepository.readTrash(activeMode));
-          const source = stored
-            .slice().sort(storeName === 'history'
-              ? (left, right) => right.closedAt - left.closedAt
-              : (left, right) => right.deletedAt - left.deletedAt);
-          const results = historyStore.buildSearchResults(source, query, { deduplicateSingles: false });
-          const totalTabs = historyStore.countTabs(source);
+        return readStable(activeMode, async (metadata) => {
+          if (!metadata.indexed || typeof recordStore.scanGenerationPage !== 'function') {
+            const legacyContext = metadata.indexed ? null : await legacyRepository.readContext(activeMode);
+            const stored = metadata.indexed
+              ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
+              : legacyContext[storeName];
+            const source = stored
+              .slice().sort(storeName === 'history'
+                ? (left, right) => right.closedAt - left.closedAt
+                : (left, right) => right.deletedAt - left.deletedAt);
+            const results = historyStore.buildSearchResults(source, query, { deduplicateSingles: false });
+            const totalTabs = historyStore.countTabs(source);
+            return {
+              settings: legacyContext ? legacyContext.settings : metadata.settings,
+              revision: legacyContext ? legacyContext.revision : metadata.revision,
+              results: results.slice(offset, offset + limit),
+              statistics: {
+                totalRecords: source.length,
+                totalTabs,
+                matchingRecords: results.length,
+                matchingTabs: results.reduce((sum, item) => sum + item.matchedTabCount, 0),
+                resultTabs: results.reduce((sum, item) => sum + item.totalTabCount, 0),
+              },
+            };
+          }
+          const page = await recordStore.scanGenerationPage(
+            storeName, activeMode, metadata.generation, { offset, limit },
+            (candidate) => {
+              const normalized = storeName === 'history'
+                ? normalizeHistory([candidate], activeMode)[0]
+                : normalizeTrash([candidate], activeMode)[0];
+              if (!normalized) return null;
+              return historyStore.buildSearchResults(
+                [normalized], query, { deduplicateSingles: false },
+              )[0] || null;
+            },
+          );
           return {
-            settings: metadata.settings, revision: metadata.revision,
-            results: results.slice(offset, offset + limit),
+            settings: metadata.settings,
+            revision: metadata.revision,
+            results: page.records,
+            statistics: page.statistics,
+          };
+        });
+      }
+
+      async function queryHistoryByDomain(mode, query, options = {}) {
+        const activeMode = assertMode(mode);
+        const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
+        const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
+        return readStable(activeMode, async (metadata) => {
+          const domainQuery = domainGroups.createDomainQuery({
+            domain: options.domain, offset, limit,
+          });
+          const statistics = {
+            totalRecords: 0, totalTabs: 0, matchingRecords: 0, matchingTabs: 0, resultTabs: 0,
+          };
+          const visit = (candidate) => {
+            const normalized = normalizeHistory([candidate], activeMode)[0];
+            if (!normalized) return;
+            statistics.totalRecords += 1;
+            statistics.totalTabs += normalized.tabs.length;
+            const result = historyStore.buildSearchResults(
+              [normalized], query, { deduplicateSingles: false },
+            )[0];
+            if (!result) return;
+            statistics.matchingRecords += 1;
+            statistics.matchingTabs += Number(result.matchedTabCount) || 0;
+            statistics.resultTabs += Number(result.totalTabCount) || normalized.tabs.length;
+            domainQuery.add(result);
+          };
+
+          if (metadata.indexed && typeof recordStore.scanGeneration === 'function') {
+            await recordStore.scanGeneration('history', activeMode, metadata.generation, visit);
+          } else {
+            const legacyContext = metadata.indexed ? null : await legacyRepository.readContext(activeMode);
+            const stored = metadata.indexed
+              ? await recordStore.readGeneration('history', activeMode, metadata.generation)
+              : legacyContext.history;
+            stored.slice().sort((left, right) => right.closedAt - left.closedAt).forEach(visit);
+            if (legacyContext) {
+              metadata.settings = legacyContext.settings;
+              metadata.revision = legacyContext.revision;
+            }
+          }
+          const domainPage = domainQuery.finish();
+          return {
+            settings: metadata.settings,
+            revision: metadata.revision,
+            ...domainPage,
             statistics: {
-              totalRecords: source.length,
-              totalTabs,
-              matchingRecords: results.length,
-              matchingTabs: results.reduce((sum, item) => sum + item.matchedTabCount, 0),
-              resultTabs: results.reduce((sum, item) => sum + item.totalTabCount, 0),
+              ...statistics,
+              selectedRecords: domainPage.selectedRecords,
+              selectedTabs: domainPage.selectedTabs,
             },
           };
-        }
-        const page = await recordStore.scanGenerationPage(
-          storeName, activeMode, metadata.generation, { offset, limit },
-          (candidate) => {
-            const normalized = storeName === 'history'
-              ? normalizeHistory([candidate], activeMode)[0]
-              : normalizeTrash([candidate], activeMode)[0];
-            if (!normalized) return null;
-            return historyStore.buildSearchResults(
-              [normalized], query, { deduplicateSingles: false },
-            )[0] || null;
-          },
-        );
-        return {
-          settings: metadata.settings,
-          revision: metadata.revision,
-          results: page.records,
-          statistics: page.statistics,
-        };
+        });
       }
 
       async function writeBatches(storeName, mode, generation, records) {
@@ -292,14 +382,25 @@
             history: collectionChanges(current.history, history),
             trash: collectionChanges(current.trash, trash),
           };
-          await recordStore.applyGenerationChanges(
-            mode, oldMetadata.generation, changes, current.revision, revision,
-          );
+          try {
+            await recordStore.applyGenerationChanges(
+              mode, oldMetadata.generation, changes, current.revision, revision,
+            );
+          } catch (error) {
+            throw wrapIndexedDbWriteError(`indexedDB.updateContext(${mode})`, error);
+          }
           return result;
         }
 
         const generation = nextGeneration(mode, revision);
-        await stageGeneration(mode, generation, history, trash, revision);
+        try {
+          await stageGeneration(mode, generation, history, trash, revision);
+        } catch (error) {
+          throw wrapIndexedDbWriteError(
+            `indexedDB.${includeSettings ? 'updateSettingsAndContext' : 'updateContext'}(${mode})`,
+            error,
+          );
+        }
         const payload = {
           [INDEXEDDB_KEYS.generation[mode]]: generation,
           [STORAGE_KEYS.revision[mode]]: revision,
@@ -331,7 +432,14 @@
       async function migrateLegacyState(mode) {
         const activeMode = assertMode(mode);
         const legacyResult = await legacyRepository.migrateLegacyState();
-        const indexedDbResult = await migration.migrateMode(activeMode);
+        let indexedDbResult;
+        try {
+          indexedDbResult = indexedModes.has(activeMode)
+            ? await migration.migrateMode(activeMode)
+            : await migration.restoreModeToLegacy(activeMode);
+        } catch (error) {
+          throw wrapIndexedDbWriteError(`indexedDB.migrateLegacyState(${activeMode})`, error);
+        }
         return { ...legacyResult, indexedDb: indexedDbResult };
       }
 
@@ -344,10 +452,14 @@
         readHistory: (mode) => readCollection('history', mode),
         readTrash: (mode) => readCollection('trash', mode),
         queryCollection,
+        queryHistoryByDomain,
         saveSettings: (...args) => legacyRepository.saveSettings(...args),
-        updateContext: (mode, mutator) => enqueue(mode, () => performUpdate(mode, mutator, false)),
-        updateSettingsAndContext: (mode, mutator) => enqueue(mode,
-          () => performUpdate(mode, mutator, true)),
+        updateContext: (mode, mutator) => indexedModes.has(assertMode(mode))
+          ? enqueue(mode, () => performUpdate(mode, mutator, false))
+          : legacyRepository.updateContext(mode, mutator),
+        updateSettingsAndContext: (mode, mutator) => indexedModes.has(assertMode(mode))
+          ? enqueue(mode, () => performUpdate(mode, mutator, true))
+          : legacyRepository.updateSettingsAndContext(mode, mutator),
       };
     }
 
