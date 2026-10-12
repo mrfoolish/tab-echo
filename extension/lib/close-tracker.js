@@ -16,7 +16,6 @@
     return {
       tabSnapshotsById: {},
       windowSnapshotsById: {},
-      pendingBatches: {},
       consumedWindowIds: {},
       pendingEventsById: {},
       nextCommitSequence: 1,
@@ -28,7 +27,6 @@
     return {
       tabSnapshotsById: objectCopy(source.tabSnapshotsById),
       windowSnapshotsById: objectCopy(source.windowSnapshotsById),
-      pendingBatches: objectCopy(source.pendingBatches),
       consumedWindowIds: objectCopy(source.consumedWindowIds),
       pendingEventsById: objectCopy(source.pendingEventsById),
       nextCommitSequence: Number.isSafeInteger(source.nextCommitSequence)
@@ -255,8 +253,6 @@
         liveIdsByWindow[key] = liveIdsByWindow[key] || new Set();
         liveIdsByWindow[key].add(snapshot.id);
       }
-      const protectedIds = new Set(Object.values(state.pendingBatches)
-        .flatMap((batch) => Array.isArray(batch.tabIds) ? batch.tabIds.map(String) : []));
       // Only reconcile windows proven live by tabs.query. A wholly absent window may have
       // closed immediately before startup, so its durable snapshot must await onRemoved/recovery.
       for (const [windowKey, liveIds] of Object.entries(liveIdsByWindow)) {
@@ -265,18 +261,14 @@
           continue;
         }
         for (const id of windowSnapshot.tabIds) {
-          if (!liveIds.has(String(id)) && !protectedIds.has(String(id))) {
+          if (!liveIds.has(String(id))) {
             delete state.tabSnapshotsById[String(id)];
           }
         }
         const liveSnapshots = accepted
           .filter((snapshot) => String(snapshot.sourceWindowId) === windowKey)
           .sort((left, right) => left.position - right.position);
-        const protectedMissingIds = windowSnapshot.tabIds.filter((id) => {
-          return !liveIds.has(String(id)) && protectedIds.has(String(id));
-        });
-        windowSnapshot.tabIds = liveSnapshots.map((snapshot) => snapshot.id)
-          .concat(protectedMissingIds);
+        windowSnapshot.tabIds = liveSnapshots.map((snapshot) => snapshot.id);
         liveSnapshots.forEach((snapshot, index) => {
           state.tabSnapshotsById[snapshot.id] = { ...snapshot, position: index };
         });
@@ -327,22 +319,22 @@
       if (!snapshot || snapshot.mode !== mode || !isHttpUrl(snapshot.url)) {
         return { ignored: true, state: getState() };
       }
-      const pending = state.pendingBatches[windowKey] || {
-        windowId,
-        mode,
-        tabIds: [],
-        closedAt: now(),
-        windowClosing: false,
-      };
-      pending.tabIds.push(id);
-      pending.tabIds = Array.from(new Set(pending.tabIds));
-      pending.closedAt = now();
-      pending.windowClosing = pending.windowClosing || Boolean(removeInfo.isWindowClosing);
-      state.pendingBatches[windowKey] = pending;
+      if (removeInfo.isWindowClosing) {
+        return { ignored: false, event: null, windowId, windowClosing: true, state: getState() };
+      }
+      const event = buildEvent([id], windowId, now());
+      putInOutbox(event);
+      cleanupTabIds([id]);
+      const windowSnapshot = state.windowSnapshotsById[windowKey];
+      if (windowSnapshot) {
+        windowSnapshot.tabIds = windowSnapshot.tabIds.filter((candidate) => candidate !== id);
+        if (windowSnapshot.tabIds.length === 0) delete state.windowSnapshotsById[windowKey];
+      }
       return {
         ignored: false,
+        event: clone(event),
         windowId,
-        windowClosing: pending.windowClosing,
+        windowClosing: false,
         state: getState(),
       };
     }
@@ -414,56 +406,20 @@
       }
     }
 
-    function flushBatch(windowId) {
-      const key = String(windowId);
-      if (state.consumedWindowIds[key]) {
-        delete state.pendingBatches[key];
-        return { event: null, state: getState() };
-      }
-      const pending = state.pendingBatches[key];
-      if (!pending) {
-        return { event: null, state: getState() };
-      }
-      const event = buildEvent(pending.tabIds, pending.windowId, pending.closedAt);
-      putInOutbox(event);
-      delete state.pendingBatches[key];
-      cleanupTabIds(pending.tabIds);
-      const windowSnapshot = state.windowSnapshotsById[key];
-      if (windowSnapshot) {
-        windowSnapshot.tabIds = windowSnapshot.tabIds
-          .filter((id) => !pending.tabIds.includes(String(id)));
-        if (windowSnapshot.tabIds.length === 0) {
-          delete state.windowSnapshotsById[key];
-        }
-      }
-      return { event: clone(event), state: getState() };
-    }
-
     function removeWindow(windowId) {
       const key = String(windowId);
       if (state.consumedWindowIds[key]) {
         return { event: null, ignored: true, state: getState() };
       }
       const windowSnapshot = state.windowSnapshotsById[key];
-      const pending = state.pendingBatches[key];
       const tabIds = windowSnapshot && Array.isArray(windowSnapshot.tabIds)
-        ? windowSnapshot.tabIds
-        : pending && Array.isArray(pending.tabIds) ? pending.tabIds : [];
-      const event = buildEvent(tabIds, windowId, pending && pending.closedAt, 'group');
+        ? windowSnapshot.tabIds : [];
+      const event = buildEvent(tabIds, windowId, now(), 'group');
       putInOutbox(event);
       state.consumedWindowIds[key] = now();
-      delete state.pendingBatches[key];
       delete state.windowSnapshotsById[key];
       cleanupTabIds(tabIds);
       return { event: clone(event), ignored: false, state: getState() };
-    }
-
-    function pendingWindowIds() {
-      return Object.keys(state.pendingBatches).map((id) => Number(id));
-    }
-
-    function getPendingBatches() {
-      return Object.values(state.pendingBatches).map(clone);
     }
 
     function pendingEvents() {
@@ -473,20 +429,6 @@
     function acknowledgeEvent(commitKey) {
       delete state.pendingEventsById[String(commitKey)];
       return { state: getState() };
-    }
-
-    function recoverClosedWindows(liveWindowIds) {
-      const live = new Set((Array.isArray(liveWindowIds) ? liveWindowIds : []).map(String));
-      const events = [];
-      for (const pending of getPendingBatches()) {
-        if (pending.windowClosing && !live.has(String(pending.windowId))) {
-          const result = removeWindow(pending.windowId);
-          if (result.event) {
-            events.push(result.event);
-          }
-        }
-      }
-      return { events, state: getState() };
     }
 
     function recoverMissingWindows(liveWindowIds) {
@@ -539,9 +481,6 @@
         }
       }
 
-      // A lost browser session also loses ordinary close timers. Missing snapshots were
-      // materialized above; snapshots that still match live tabs were never closed.
-      state.pendingBatches = {};
       hydrate(tabs);
       return { events, state: getState() };
     }
@@ -550,17 +489,13 @@
       acknowledgeEvent,
       attachTab,
       detachTab,
-      flushBatch,
-      getPendingBatches,
       getState,
       hydrate,
       moveTab,
       pendingEvents,
-      pendingWindowIds,
       removeTab,
       removeWindow,
       reconcileRecoveredSession,
-      recoverClosedWindows,
       recoverMissingWindows,
       upsertTab,
     };

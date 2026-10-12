@@ -3,7 +3,6 @@ importScripts(
   'lib/domain-groups.js',
   'lib/storage-repository.js',
   'lib/indexeddb-repository.js',
-  'lib/indexeddb-migration.js',
   'lib/indexeddb-storage-repository.js',
   'lib/close-tracker.js'
 );
@@ -31,7 +30,6 @@ const { createStorageRepository } = self.TabEchoStorageRepository;
 const { createDomainQuery } = self.TabEchoDomainGroups;
 const { createCloseTracker, createTrackerPersistence, isHttpUrl } = self.TabEchoCloseTracker;
 
-const CLOSE_BATCH_DELAY_MS = 450;
 const CLEANUP_ALARM_NAME = 'tab-echo-daily-cleanup';
 const ACTION_TOKEN_TTL_MS = 5 * 60 * 1000;
 const ACTION_TOKEN_LIMIT = 32;
@@ -61,7 +59,6 @@ const trackerPersistence = createTrackerPersistence(
   chrome.storage.local,
   TRACKER_SESSION_KEY,
 );
-const flushTimers = new Map();
 let tracker;
 let trackerQueue = Promise.resolve();
 let readyPromise = null;
@@ -132,9 +129,8 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   enqueueTrackerMutation(async () => {
     const result = tracker.removeTab(tabId, removeInfo);
     if (!result.windowClosing) {
-      // Ordinary tab closes need a durable pending batch before their timer is scheduled.
+      // Ordinary tab closes enter the durable outbox immediately.
       await persistTrackerState();
-      if (!result.ignored) scheduleBatchFlush(result.windowId);
     }
     // Whole-window closes reuse the already durable window snapshot. Persisting the same
     // snapshot once per removed tab creates quadratic write amplification for large windows.
@@ -144,7 +140,6 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 
 chrome.windows.onRemoved.addListener((windowId) => {
   enqueueTrackerMutation(async () => {
-    cancelBatchFlush(windowId);
     const result = tracker.removeWindow(windowId);
     // The full last window snapshot and event outbox are durable before history is touched.
     await persistTrackerState();
@@ -170,7 +165,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function initialize() {
-  await repository.migrateLegacyState(activeMode);
   const stored = await trackerPersistence.load();
   tracker = createCloseTracker({
     mode: activeMode,
@@ -185,18 +179,12 @@ async function initialize() {
     tracker.reconcileRecoveredSession(tabs);
   } else {
     tracker.hydrate(tabs);
-    tracker.recoverClosedWindows(liveWindowIds);
     tracker.recoverMissingWindows(liveWindowIds);
   }
   await persistTrackerState();
 
   await commitAllPendingEvents();
   await cleanupActiveContext();
-  for (const pending of tracker.getPendingBatches()) {
-    if (!pending.windowClosing) {
-      scheduleBatchFlush(pending.windowId);
-    }
-  }
 }
 
 async function ensureCleanupAlarm() {
@@ -269,33 +257,6 @@ async function persistTrackerState() {
   await trackerPersistence.save(tracker.getState());
 }
 
-function scheduleBatchFlush(windowId) {
-  cancelBatchFlush(windowId);
-  const timer = setTimeout(() => {
-    flushTimers.delete(String(windowId));
-    enqueueTrackerMutation(() => flushBatch(windowId)).catch(reportError);
-  }, CLOSE_BATCH_DELAY_MS);
-  flushTimers.set(String(windowId), timer);
-}
-
-function cancelBatchFlush(windowId) {
-  const key = String(windowId);
-  const timer = flushTimers.get(key);
-  if (timer) {
-    clearTimeout(timer);
-    flushTimers.delete(key);
-  }
-}
-
-async function flushBatch(windowId) {
-  const result = tracker.flushBatch(windowId);
-  // Persist the removal of the batch and addition to the event outbox atomically.
-  await persistTrackerState();
-  if (result.event) {
-    await commitAllPendingEvents();
-  }
-}
-
 async function commitAllPendingEvents() {
   for (const entry of tracker.pendingEvents()) {
     await commitPendingEvent(entry);
@@ -322,12 +283,6 @@ async function handleMessage(message) {
   const action = message && (message.type || message.action);
   if (action === 'get-current-mode') {
     return { mode: activeMode };
-  }
-  if (action === 'get-migration-notice') {
-    return { notice: await repository.getMigrationNotice() };
-  }
-  if (action === 'acknowledge-migration-notice') {
-    return { acknowledged: await repository.acknowledgeMigrationNotice(message.id) };
   }
   if (action === 'get-settings') {
     const settings = await repository.getSettings();

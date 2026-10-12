@@ -20,7 +20,7 @@ function createVm(responder, runtime = {}) {
   const nodes = new Map(); const listeners = {}; const messages = []; let closeCount = 0;
   function makeNode(id = '', localName = '') {
     if (id && nodes.has(id)) return nodes.get(id);
-    const value = { id, localName, dataset: {}, style: {}, hidden: id === 'migrationNotice', disabled: false, value: '', textContent: '', title: '', children: [],
+    const value = { id, localName, dataset: {}, style: {}, hidden: false, disabled: false, value: '', textContent: '', title: '', children: [],
       classList: { toggle(name, enabled) { value['class-' + name] = enabled; } },
       addEventListener(type, handler) { listeners[id + ':' + type] = handler; },
       setAttribute(name, data) { this[name] = String(data); }, removeAttribute(name) { delete this[name]; },
@@ -214,62 +214,8 @@ test('popup keeps bilingual domain copy and avoids legacy wording', () => {
   }
   assert.doesNotMatch(html + '\n' + js, /Normal history|普通历史|current mode|当前模式|搜索标题或 URL/);
   assert.match(html, /role="status"[^>]+aria-live="polite"/);
-  assert.match(html, /id="migrationNotice"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.doesNotMatch(html + '\n' + js, /migrationNotice|migration-notice/);
   assert.doesNotMatch(js, /\.innerHTML\s*=/);
-});
-
-test('Popup renders the localized migration notice before acknowledging it once', async () => {
-  const notice = { id: 'notice-popup', version: 2, skippedEvents: 5, createdAt: 12345 };
-  let app;
-  app = createVm(async (message) => {
-    if (message.type === 'get-migration-notice') return { ok: true, notice };
-    if (message.type === 'get-settings') return { ok: true, settings: { language: 'zh' } };
-    if (message.type === 'acknowledge-migration-notice') {
-      assert.equal(app.nodes.get('migrationNotice').textContent, '已迁移现有关闭记录，其中 5 条损坏记录无法恢复。');
-      assert.equal(app.nodes.get('migrationNotice').hidden, false);
-      assert.equal(message.id, notice.id);
-      return { ok: true, acknowledged: true };
-    }
-    if (message.type === 'get-history') return { ok: true, mode: 'normal', settings: { language: 'zh' }, results: [], resultEventCount: 0 };
-    if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 0 };
-    return { ok: true };
-  });
-
-  app.listeners['document:DOMContentLoaded']();
-  await settle();
-
-  assert.deepEqual(app.messages.filter((message) => /migration-notice/.test(message.type)), [
-    { type: 'get-migration-notice' },
-    { type: 'acknowledge-migration-notice', id: notice.id },
-  ]);
-});
-
-test('Popup localizes and acknowledges a notice from settings even when history fails', async () => {
-  const notice = { id: 'notice-settings', version: 2, skippedEvents: 6, createdAt: 12345 };
-  const app = createVm(async (message) => {
-    if (message.type === 'get-migration-notice') return { ok: true, notice };
-    if (message.type === 'get-settings') return { ok: true, settings: { language: 'zh', theme: 'dark' } };
-    if (message.type === 'get-history') throw new Error('history failed');
-    if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 0 };
-    return { ok: true, acknowledged: true };
-  });
-  app.listeners['document:DOMContentLoaded'](); await settle();
-  assert.equal(app.nodes.get('migrationNotice').textContent, '已迁移现有关闭记录，其中 6 条损坏记录无法恢复。');
-  assert.equal(app.nodes.get('migrationNotice').hidden, false);
-  assert.ok(app.messages.some((message) => message.type === 'acknowledge-migration-notice'));
-});
-
-test('Popup leaves a notice hidden and unacknowledged when independent settings fail', async () => {
-  const app = createVm(async (message) => {
-    if (message.type === 'get-migration-notice') return { ok: true, notice: { id: 'retry', version: 2, skippedEvents: 1, createdAt: 1 } };
-    if (message.type === 'get-settings') throw new Error('settings failed');
-    if (message.type === 'get-history') return { ok: true, settings: { language: 'zh' }, results: [], resultEventCount: 0 };
-    if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 0 };
-    return { ok: true };
-  });
-  app.listeners['document:DOMContentLoaded'](); await settle();
-  assert.equal(app.nodes.get('migrationNotice').hidden, true);
-  assert.equal(app.messages.some((message) => message.type === 'acknowledge-migration-notice'), false);
 });
 
 test('popup uses the query protocol, caps event results, and exposes counted dashboard navigation', () => {

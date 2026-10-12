@@ -3,7 +3,6 @@
     module.exports = factory(
       require('./history-store.js'),
       require('./storage-repository.js'),
-      require('./indexeddb-migration.js'),
       require('./domain-groups.js'),
     );
     return;
@@ -11,18 +10,32 @@
   root.TabEchoIndexedDbStorageRepository = factory(
     root.TabEchoHistoryStore,
     root.TabEchoStorageRepository,
-    root.TabEchoIndexedDbMigration,
     root.TabEchoDomainGroups,
   );
 })(typeof globalThis !== 'undefined' ? globalThis : this,
-  function createModule(historyStore, storageModule, migrationModule, domainGroups) {
-    if (!historyStore || !storageModule || !migrationModule || !domainGroups) {
+  function createModule(historyStore, storageModule, domainGroups) {
+    if (!historyStore || !storageModule || !domainGroups) {
       throw new Error('IndexedDB repository dependencies are required.');
     }
 
     const MODES = ['normal', 'incognito'];
     const { STORAGE_KEYS, StorageWriteError, createStorageRepository } = storageModule;
-    const { KEYS: INDEXEDDB_KEYS, createIndexedDbMigration, createYieldControl } = migrationModule;
+    const INDEXEDDB_KEYS = Object.freeze({
+      generation: Object.freeze({
+        normal: 'tabEcho:indexeddb-generation:normal:v1',
+        incognito: 'tabEcho:indexeddb-generation:incognito:v1',
+      }),
+    });
+
+    function createYieldControl(environment = globalThis) {
+      return async function yieldControl() {
+        if (environment.scheduler && typeof environment.scheduler.yield === 'function') {
+          await environment.scheduler.yield();
+          return;
+        }
+        await new Promise((resolve) => environment.setTimeout(resolve, 0));
+      };
+    }
 
     function clone(value) {
       if (value === undefined) return undefined;
@@ -86,15 +99,6 @@
       const legacyRepository = options.legacyRepository || createStorageRepository(storageArea, options);
       const indexedModes = new Set(Array.isArray(options.indexedModes)
         ? options.indexedModes.filter((mode) => MODES.includes(mode)) : MODES);
-      const migration = options.migration || createIndexedDbMigration({
-        storageArea,
-        recordStore,
-        batchSize: options.batchSize,
-        timeBudgetMs: options.timeBudgetMs,
-        performanceNow: options.performanceNow,
-        yieldControl: options.yieldControl,
-        now: options.now,
-      });
       const retryLimit = Number.isSafeInteger(options.retryLimit) && options.retryLimit >= 0
         ? options.retryLimit : 3;
       const maxAttempts = retryLimit + 1;
@@ -127,12 +131,10 @@
           STORAGE_KEYS.settingsRevision,
           STORAGE_KEYS.revision[mode],
           INDEXEDDB_KEYS.generation[mode],
-          INDEXEDDB_KEYS.marker[mode],
         ]);
         const generation = readValue(result, INDEXEDDB_KEYS.generation[mode]);
-        const marker = readValue(result, INDEXEDDB_KEYS.marker[mode]);
-        const indexed = indexedModes.has(mode) && typeof generation === 'string' && generation
-          && marker && marker.status === 'complete';
+        const managed = indexedModes.has(mode);
+        const indexed = managed && typeof generation === 'string' && Boolean(generation);
         let revision = normalizeRevision(readValue(result, STORAGE_KEYS.revision[mode]));
         if (indexed && typeof recordStore.readGenerationRevision === 'function') {
           const indexedRevision = await recordStore.readGenerationRevision(mode, generation);
@@ -141,6 +143,7 @@
           }
         }
         return {
+          managed,
           indexed: Boolean(indexed),
           generation: indexed ? generation : null,
           settings: historyStore.normalizeSettings(readValue(result, STORAGE_KEYS.settings)),
@@ -172,7 +175,16 @@
       async function readContext(mode) {
         const activeMode = assertMode(mode);
         return readStable(activeMode, async (metadata) => {
-          if (!metadata.indexed) return legacyRepository.readContext(activeMode);
+          if (!metadata.managed) return legacyRepository.readContext(activeMode);
+          if (!metadata.indexed) {
+            return {
+              settings: metadata.settings,
+              history: [],
+              trash: [],
+              revision: metadata.revision,
+              settingsRevision: metadata.settingsRevision,
+            };
+          }
           const [history, trash] = await Promise.all([
             recordStore.readGeneration('history', activeMode, metadata.generation),
             recordStore.readGeneration('trash', activeMode, metadata.generation),
@@ -190,10 +202,11 @@
       async function readCollection(storeName, mode) {
         const activeMode = assertMode(mode);
         return readStable(activeMode, async (metadata) => {
-          if (!metadata.indexed) {
+          if (!metadata.managed) {
             return storeName === 'history'
               ? legacyRepository.readHistory(activeMode) : legacyRepository.readTrash(activeMode);
           }
+          if (!metadata.indexed) return [];
           const records = await recordStore.readGeneration(storeName, activeMode, metadata.generation);
           return storeName === 'history'
             ? normalizeHistory(records, activeMode) : normalizeTrash(records, activeMode);
@@ -205,11 +218,15 @@
         const offset = Number.isSafeInteger(options.offset) && options.offset > 0 ? options.offset : 0;
         const limit = Number.isSafeInteger(options.limit) && options.limit > 0 ? options.limit : 50;
         return readStable(activeMode, async (metadata) => {
-          if (!metadata.indexed || typeof recordStore.scanGenerationPage !== 'function') {
-            const legacyContext = metadata.indexed ? null : await legacyRepository.readContext(activeMode);
-            const stored = metadata.indexed
-              ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
-              : legacyContext[storeName];
+          if (!metadata.managed || !metadata.indexed
+            || typeof recordStore.scanGenerationPage !== 'function') {
+            const legacyContext = metadata.managed
+              ? null : await legacyRepository.readContext(activeMode);
+            const stored = !metadata.managed
+              ? legacyContext[storeName]
+              : metadata.indexed
+                ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
+                : [];
             const source = stored
               .slice().sort(storeName === 'history'
                 ? (left, right) => right.closedAt - left.closedAt
@@ -279,10 +296,13 @@
           if (metadata.indexed && typeof recordStore.scanGeneration === 'function') {
             await recordStore.scanGeneration('history', activeMode, metadata.generation, visit);
           } else {
-            const legacyContext = metadata.indexed ? null : await legacyRepository.readContext(activeMode);
-            const stored = metadata.indexed
-              ? await recordStore.readGeneration('history', activeMode, metadata.generation)
-              : legacyContext.history;
+            const legacyContext = metadata.managed
+              ? null : await legacyRepository.readContext(activeMode);
+            const stored = !metadata.managed
+              ? legacyContext.history
+              : metadata.indexed
+                ? await recordStore.readGeneration('history', activeMode, metadata.generation)
+                : [];
             stored.slice().sort((left, right) => right.closedAt - left.closedAt).forEach(visit);
             if (legacyContext) {
               metadata.settings = legacyContext.settings;
@@ -429,25 +449,8 @@
         return run;
       }
 
-      async function migrateLegacyState(mode) {
-        const activeMode = assertMode(mode);
-        const legacyResult = await legacyRepository.migrateLegacyState();
-        let indexedDbResult;
-        try {
-          indexedDbResult = indexedModes.has(activeMode)
-            ? await migration.migrateMode(activeMode)
-            : await migration.restoreModeToLegacy(activeMode);
-        } catch (error) {
-          throw wrapIndexedDbWriteError(`indexedDB.migrateLegacyState(${activeMode})`, error);
-        }
-        return { ...legacyResult, indexedDb: indexedDbResult };
-      }
-
       return {
-        acknowledgeMigrationNotice: (...args) => legacyRepository.acknowledgeMigrationNotice(...args),
-        getMigrationNotice: (...args) => legacyRepository.getMigrationNotice(...args),
         getSettings: (...args) => legacyRepository.getSettings(...args),
-        migrateLegacyState,
         readContext,
         readHistory: (mode) => readCollection('history', mode),
         readTrash: (mode) => readCollection('trash', mode),
@@ -463,5 +466,5 @@
       };
     }
 
-    return { createIndexedDbStorageRepository };
+    return { INDEXEDDB_KEYS, createIndexedDbStorageRepository, createYieldControl };
   });

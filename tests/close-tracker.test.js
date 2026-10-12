@@ -114,18 +114,19 @@ test('moving within a window updates the complete window ordering', () => {
   ], [0, 1, 2]);
 });
 
-test('quick ordinary removals aggregate by window into one group', () => {
+test('ordinary removals create independent durable single events immediately', () => {
   const subject = tracker();
-  subject.hydrate([tab(1, 10, 0), tab(2, 10, 1), tab(3, 11, 0)]);
-  subject.removeTab(1, { windowId: 10, isWindowClosing: false });
-  subject.removeTab(2, { windowId: 10, isWindowClosing: false });
-  subject.removeTab(3, { windowId: 11, isWindowClosing: false });
+  subject.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
 
-  const first = subject.flushBatch(10);
-  const second = subject.flushBatch(11);
-  assert.equal(first.event.kind, 'group');
-  assert.deepEqual(first.event.tabs.map((item) => item.id), ['1', '2']);
+  const first = subject.removeTab(1, { windowId: 10, isWindowClosing: false });
+  const second = subject.removeTab(2, { windowId: 10, isWindowClosing: false });
+
+  assert.equal(first.event.kind, 'single');
   assert.equal(second.event.kind, 'single');
+  assert.deepEqual(subject.pendingEvents().map((item) => item.event.tabs[0].id), ['1', '2']);
+  assert.equal(subject.getState().pendingBatches, undefined);
+  assert.equal(subject.getState().tabSnapshotsById['1'], undefined);
+  assert.equal(subject.getState().tabSnapshotsById['2'], undefined);
 });
 
 test('window removal uses the last durable window snapshot as one complete group', () => {
@@ -150,8 +151,7 @@ test('a whole window with one http tab is still recorded as a group', () => {
 test('returned events are deep copies of the durable outbox', () => {
   const subject = tracker();
   subject.hydrate([tab(1, 10, 0)]);
-  subject.removeTab(1, { windowId: 10 });
-  const ordinary = subject.flushBatch(10).event;
+  const ordinary = subject.removeTab(1, { windowId: 10 }).event;
   ordinary.tabs[0].title = 'mutated';
   assert.equal(subject.pendingEvents()[0].event.tabs[0].title, 'Tab 1');
 
@@ -162,7 +162,7 @@ test('returned events are deep copies of the durable outbox', () => {
   assert.equal(second.pendingEvents()[0].event.tabs[0].title, 'Tab 2');
 });
 
-test('window removal cancels a pending tab-first batch and prevents duplicate tab removals', () => {
+test('window removal consumes the durable snapshot and prevents duplicate tab removals', () => {
   const subject = tracker();
   subject.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
   subject.removeTab(1, { windowId: 10, isWindowClosing: true });
@@ -170,7 +170,7 @@ test('window removal cancels a pending tab-first batch and prevents duplicate ta
   const windowResult = subject.removeWindow(10);
   const lateTabResult = subject.removeTab(2, { windowId: 10, isWindowClosing: true });
   assert.deepEqual(windowResult.event.tabs.map((item) => item.id), ['1', '2']);
-  assert.equal(subject.flushBatch(10).event, null);
+  assert.equal(subject.pendingEvents().length, 1);
   assert.equal(lateTabResult.ignored, true);
 });
 
@@ -184,47 +184,27 @@ test('window-first order records once and ignores subsequent tab removals', () =
   assert.equal(subject.removeTab(2, { windowId: 10, isWindowClosing: true }).ignored, true);
 });
 
-test('serialized session state contains window snapshots and pending batches for restart', () => {
+test('serialized session state contains immediate ordinary-close outbox entries for restart', () => {
   const first = tracker();
   first.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
-  first.removeTab(1, { windowId: 10, isWindowClosing: false });
+  const result = first.removeTab(1, { windowId: 10, isWindowClosing: false });
   const durableState = structuredClone(first.getState());
 
-  assert.deepEqual(durableState.windowSnapshotsById['10'].tabIds, ['1', '2']);
-  assert.deepEqual(durableState.pendingBatches['10'].tabIds, ['1']);
+  assert.deepEqual(durableState.windowSnapshotsById['10'].tabIds, ['2']);
+  assert.equal(durableState.pendingEventsById[result.event.id].event.tabs[0].id, '1');
 
   const restarted = tracker(durableState);
-  const result = restarted.flushBatch(10);
-  assert.deepEqual(result.event.tabs.map((item) => item.id), ['1']);
-  assert.equal(restarted.getState().pendingBatches['10'], undefined);
+  assert.deepEqual(restarted.pendingEvents().map((entry) => entry.event.tabs[0].id), ['1']);
 });
 
-test('restart exposes window-closing batches for direct window recovery without a timer', () => {
+test('restart keeps a whole-window snapshot authoritative after tab removal notifications', () => {
   const first = tracker();
   first.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
   first.removeTab(1, { windowId: 10, isWindowClosing: true });
 
   const restarted = tracker(first.getState());
-  assert.deepEqual(restarted.getPendingBatches(), [{
-    windowId: 10,
-    mode: 'normal',
-    tabIds: ['1'],
-    closedAt: 1700000000000,
-    windowClosing: true,
-  }]);
+  assert.deepEqual(restarted.pendingEvents(), []);
   assert.deepEqual(restarted.removeWindow(10).event.tabs.map((item) => item.id), ['1', '2']);
-});
-
-test('startup recovery consumes only window-closing batches whose window is no longer live', () => {
-  const subject = tracker();
-  subject.hydrate([tab(1, 10, 0), tab(2, 20, 0)]);
-  subject.removeTab(1, { windowId: 10, isWindowClosing: true });
-  subject.removeTab(2, { windowId: 20, isWindowClosing: true });
-
-  const recovered = subject.recoverClosedWindows([20]);
-  assert.equal(recovered.events.length, 1);
-  assert.equal(recovered.events[0].sourceWindowId, 10);
-  assert.deepEqual(subject.getPendingBatches().map((item) => item.windowId), [20]);
 });
 
 test('startup recovery records durable window snapshots missing after a forced browser exit', () => {
@@ -299,8 +279,7 @@ test('session-loss reconciliation archives only missing tabs from a partially re
 test('generated events have independent durable commit keys until acknowledged', () => {
   const first = tracker();
   first.hydrate([tab(1, 10, 0)]);
-  first.removeTab(1, { windowId: 10, isWindowClosing: false });
-  const result = first.flushBatch(10);
+  const result = first.removeTab(1, { windowId: 10, isWindowClosing: false });
 
   const restarted = tracker(first.getState());
   assert.equal(restarted.pendingEvents()[0].event.id, result.event.id);
@@ -318,9 +297,7 @@ test('colliding generated ids still produce distinct stable event ids and batch 
   const subject = make();
   subject.hydrate([tab(1, 10, 0), tab(2, 20, 0)]);
   subject.removeTab(1, { windowId: 10 });
-  subject.flushBatch(10);
   subject.removeTab(2, { windowId: 20 });
-  subject.flushBatch(20);
 
   const entries = subject.pendingEvents();
   assert.equal(entries.length, 2);
@@ -343,15 +320,15 @@ test('colliding generated ids still produce distinct stable event ids and batch 
   assert.deepEqual(getRestoreUrls(historyState.events.normal[0]), ['https://example.com/2']);
 });
 
-test('hydrate preserves closed snapshots required by restored pending batches', () => {
+test('hydrate preserves restored ordinary-close outbox events without stale snapshots', () => {
   const first = tracker();
   first.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
   first.removeTab(1, { windowId: 10, isWindowClosing: false });
 
   const restarted = tracker(first.getState());
   restarted.hydrate([tab(2, 10, 0)]);
-  assert.equal(restarted.getState().tabSnapshotsById['1'].url, 'https://example.com/1');
-  assert.equal(restarted.flushBatch(10).event.tabs[0].id, '1');
+  assert.equal(restarted.getState().tabSnapshotsById['1'], undefined);
+  assert.equal(restarted.pendingEvents()[0].event.tabs[0].id, '1');
 });
 
 test('hydrate removes stale tabs from a still-open window when no close is pending', () => {
@@ -371,9 +348,7 @@ test('filters non-http tabs and rejects snapshots from the other context', () =>
     tab(2, 10, 1, { incognito: true }),
     tab(3, 10, 2),
   ]);
-  subject.removeTab(3, { windowId: 10, isWindowClosing: false });
-
-  const result = subject.flushBatch(10);
+  const result = subject.removeTab(3, { windowId: 10, isWindowClosing: false });
   assert.deepEqual(result.event.tabs.map((item) => item.id), ['3']);
 });
 
@@ -395,12 +370,14 @@ test('consumed window ids expire after the deduplication ttl', () => {
 
 test('background loads tracker and repository and derives its partition from worker context', () => {
   const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
-  assert.match(source, /importScripts\(\s*'lib\/history-store\.js',[\s\S]*'lib\/storage-repository\.js',[\s\S]*'lib\/indexeddb-repository\.js',[\s\S]*'lib\/indexeddb-migration\.js',[\s\S]*'lib\/indexeddb-storage-repository\.js',[\s\S]*'lib\/close-tracker\.js'\s*\)/);
+  assert.match(source, /importScripts\(\s*'lib\/history-store\.js',[\s\S]*'lib\/storage-repository\.js',[\s\S]*'lib\/indexeddb-repository\.js',[\s\S]*'lib\/indexeddb-storage-repository\.js',[\s\S]*'lib\/close-tracker\.js'\s*\)/);
+  assert.doesNotMatch(source, /indexeddb-migration/);
   assert.match(source, /chrome\.extension\.inIncognitoContext\s*\?\s*'incognito'\s*:\s*'normal'/);
   assert.match(source, /tabEcho:close-tracker:.*activeMode/);
   assert.match(source, /chrome\.tabs\.onDetached\.addListener/);
   assert.match(source, /chrome\.tabs\.onAttached\.addListener/);
-  assert.match(source, /if \(!result\.windowClosing\)[\s\S]*if \(!result\.ignored\) scheduleBatchFlush/);
+  assert.match(source, /if \(!result\.windowClosing\)[\s\S]*await persistTrackerState\(\)[\s\S]*await commitAllPendingEvents\(\)/);
+  assert.doesNotMatch(source, /scheduleBatchFlush|CLOSE_BATCH_DELAY_MS|flushTimers/);
   assert.match(source, /createTrackerPersistence/);
   assert.match(source, /createIndexedDbStorageRepository/);
   assert.doesNotMatch(source, /storage\.local\.set\(\{\s*\[?STORAGE_KEY/);
@@ -551,7 +528,6 @@ test('tracker persistence keeps identical revisions in session and local after a
 test('background initialization retries after failure without concurrent duplicate initialization', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
   const listeners = {};
-  let migrationAttempts = 0;
   let queryAttempts = 0;
   const event = (name) => ({ addListener(listener) { listeners[name] = listener; } });
   const context = {
@@ -561,10 +537,6 @@ test('background initialization retries after failure without concurrent duplica
       TabEchoDomainGroups: require('../extension/lib/domain-groups.js'),
       TabEchoStorageRepository: { createStorageRepository() {
         return {
-          async migrateLegacyState() {
-            migrationAttempts += 1;
-            if (migrationAttempts === 1) throw new Error('first init fails');
-          },
           async updateContext() {}, async readContext() { return { settings: {}, history: [], trash: [] }; },
           async saveSettings() {},
         };
@@ -579,7 +551,12 @@ test('background initialization retries after failure without concurrent duplica
       tabs: {
         onCreated: event('created'), onUpdated: event('updated'), onMoved: event('moved'),
         onDetached: event('detached'), onAttached: event('attached'), onRemoved: event('removed'),
-        async query() { queryAttempts += 1; return []; }, async create() {},
+        async query() {
+          queryAttempts += 1;
+          if (queryAttempts === 1) throw new Error('first init fails');
+          return [];
+        },
+        async create() {},
       },
       windows: { onRemoved: event('windowRemoved'), async getAll() { return []; }, async create() {} },
     },
@@ -591,6 +568,5 @@ test('background initialization retries after failure without concurrent duplica
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(migrationAttempts, 2);
-  assert.equal(queryAttempts, 1);
+  assert.equal(queryAttempts, 2);
 });

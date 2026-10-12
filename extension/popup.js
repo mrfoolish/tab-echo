@@ -22,7 +22,6 @@
       moved: 'Moved {count} to Trash.', reopened: 'Reopened {count} tab(s).', partial: 'Reopened {count}; {failed} failed.',
       trashUnavailable: 'Trash count unavailable',
       groupMatch: '{matched} of {total} tabs match', storageWriteFailed: 'Could not save data to browser storage. Check available space and try again.',
-      migrationNotice: 'Existing closed-tab entries were migrated. {count} damaged record(s) could not be recovered.',
     },
     zh: {
       modeRegular: '常规窗口 · 已关闭标签页', modeIncognito: '无痕窗口 · 已关闭标签页',
@@ -38,7 +37,6 @@
       moved: '已将 {count} 条移至回收站。', reopened: '已重新打开 {count} 个标签页。', partial: '已重新打开 {count} 个；{failed} 个失败。',
       trashUnavailable: '回收站数量不可用',
       groupMatch: '命中 {matched} / {total} 个标签页', storageWriteFailed: '无法将数据保存到浏览器存储空间，请检查可用空间后重试。',
-      migrationNotice: '已迁移现有关闭记录，其中 {count} 条损坏记录无法恢复。',
     },
   };
 
@@ -86,7 +84,7 @@
 
   function collectElements(doc) {
     return Object.fromEntries(['actionTooltip', 'bulkMoveButton', 'bulkMoveLabel', 'bulkRemoveButton', 'bulkRemoveMenu', 'bulkRemoveMenuWrap', 'removeShownButton', 'removeAllButton', 'bulkRemovePanel', 'bulkRemoveMessage', 'confirmBulkRemoveButton', 'cancelBulkRemoveButton', 'historyList', 'modeLabel', 'resultSummary', 'searchInput',
-      'settingsButton', 'statusMessage', 'migrationNotice', 'trashButton', 'trashCount', 'viewAllButton'].map((id) => [id, doc.getElementById(id)]));
+      'settingsButton', 'statusMessage', 'trashButton', 'trashCount', 'viewAllButton'].map((id) => [id, doc.getElementById(id)]));
   }
 
   async function start() {
@@ -94,22 +92,12 @@
     clearRemovalConfirmation();
     bindEvents();
     elements.searchInput.focus();
-    const noticeRequest = sendMessage({ type: 'get-migration-notice' }).catch(() => null);
     const settingsResponse = await sendMessage({ type: 'get-settings' }).catch(() => null);
     if (settingsResponse && settingsResponse.settings) {
       state.settings = settingsResponse.settings;
       applyPreferences();
     }
     await refresh('');
-    const noticeResponse = await noticeRequest;
-    if (!settingsResponse || !settingsResponse.settings) return;
-    if (noticeResponse && noticeResponse.notice) await presentMigrationNotice(noticeResponse.notice);
-  }
-
-  async function presentMigrationNotice(notice) {
-    elements.migrationNotice.textContent = t('migrationNotice', { count: Number(notice.skippedEvents) || 0 });
-    elements.migrationNotice.hidden = false;
-    try { await sendMessage({ type: 'acknowledge-migration-notice', id: notice.id }); } catch (_) { /* Retry on the next UI open. */ }
   }
 
   function bindEvents() {

@@ -53,8 +53,7 @@ function entry(id, mode = 'normal', tabs = [{ id: `${id}-tab`, title: id, url: `
 const keys = {
   settings: 'tabEcho:settings:v2', normalHistory: 'tabEcho:history:normal:v2',
   incognitoHistory: 'tabEcho:history:incognito:v2', normalTrash: 'tabEcho:trash:normal:v2',
-  incognitoTrash: 'tabEcho:trash:incognito:v2', migration: 'tabEcho:migration:v2',
-  migrationNotice: 'tabEcho:migration-notice:v2',
+  incognitoTrash: 'tabEcho:trash:incognito:v2',
 };
 
 async function loadBackground({ incognito = false, localInitial = {}, localArea, sessionArea, tabs = [], awaitReady = true, queryGate, failCreateUrl, localControls = {}, storageEstimate } = {}) {
@@ -222,6 +221,26 @@ test('window-closing tab removals reuse the durable window snapshot without per-
     baselineWrites,
   );
   assert.deepEqual(subject.local.values[trackerKey].windowSnapshotsById['10'].tabIds, ['1', '2', '3']);
+});
+
+test('ordinary close is immediately visible without waiting for a batch timer', async () => {
+  const trackedTab = {
+    id: 701, windowId: 70, index: 0, incognito: false,
+    title: 'Just closed', url: 'https://just-closed.example/',
+  };
+  const subject = await loadBackground({ tabs: [trackedTab] });
+
+  subject.events.removed.listeners[0](trackedTab.id, {
+    windowId: trackedTab.windowId,
+    isWindowClosing: false,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const history = await subject.message({ type: 'get-history' });
+  assert.equal(history.ok, true);
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, trackedTab.url);
 });
 
 test('message mutations use only the trusted active partition and query all moves underlying events', async () => {
@@ -636,29 +655,6 @@ test('storage health can report regular records when local byte accounting is un
   assert.deepEqual(structuredClone(health.pools.localData), {
     supported: false, bytesUsed: null, quotaBytes: null, usageRatio: null, level: 'unknown',
   });
-});
-
-test('Popup acknowledgement consumes the shared notice before Dashboard reads from the other mode', async () => {
-  const notice = { id: 'notice-one', version: 2, skippedEvents: 3, createdAt: 12345 };
-  const local = memoryArea({
-    [keys.migration]: { version: 2, skippedEvents: 3, completedAt: 12345, noticeRequired: true, noticeId: notice.id },
-    [keys.migrationNotice]: notice,
-  });
-  const popupWorker = await loadBackground({ localArea: local });
-
-  const fetched = await popupWorker.message({ type: 'get-migration-notice', mode: 'incognito' });
-  assert.deepEqual(structuredClone(fetched), { ok: true, notice });
-  const stale = await popupWorker.message({
-    type: 'acknowledge-migration-notice', id: 'notice-stale',
-  });
-  assert.deepEqual(structuredClone(stale), { ok: true, acknowledged: false });
-  assert.deepEqual(local.values[keys.migrationNotice], notice);
-
-  const acknowledged = await popupWorker.message({ type: 'acknowledge-migration-notice', id: fetched.notice.id });
-  assert.deepEqual(structuredClone(acknowledged), { ok: true, acknowledged: true });
-  assert.equal(local.values[keys.migrationNotice], undefined);
-  const dashboardWorker = await loadBackground({ incognito: true, localArea: local });
-  assert.deepEqual(structuredClone(await dashboardWorker.message({ type: 'get-migration-notice' })), { ok: true, notice: null });
 });
 
 test('permanent deletion supports explicit ids, all query, and rejects invalid selection', async () => {

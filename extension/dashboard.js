@@ -69,7 +69,6 @@
       deleteExistingMatches: 'Remove existing matches', confirmPermanentDelete: 'Remove now',
       excludedCleanupImpact: '{events} existing records contain {tabs} matching tabs. They will be permanently deleted, not moved to Trash.',
       excludedCleanupEmpty: 'No existing history or Trash entries match the saved exclusions.', excludedCleanupDone: 'Permanently deleted {tabs} matching tabs.',
-      migrationNotice: 'Existing closed-tab entries were migrated. {count} damaged record(s) could not be recovered.',
       closedTimePrefix: 'Closed', trashedTimePrefix: 'Moved to Trash',
     },
     zh: {
@@ -130,7 +129,6 @@
       deleteExistingMatches: '移除已有匹配记录', confirmPermanentDelete: '直接移除',
       excludedCleanupImpact: '现有历史和回收站中有 {events} 条记录包含 {tabs} 个匹配标签页。它们将被永久删除，不会移入回收站。',
       excludedCleanupEmpty: '现有历史和回收站中没有匹配已保存排除规则的记录。', excludedCleanupDone: '已永久删除 {tabs} 个匹配标签页。',
-      migrationNotice: '已迁移现有关闭记录，其中 {count} 条损坏记录无法恢复。',
       closedTimePrefix: '关闭于', trashedTimePrefix: '移入回收站于',
     },
   };
@@ -360,7 +358,7 @@
     };
     const elements = {
       nav: doc.getElementById('dashboardNav'), search: doc.getElementById('searchInput'),
-      status: doc.getElementById('statusMessage'), migrationNotice: doc.getElementById('migrationNotice'), historyView: doc.getElementById('historyView'),
+      status: doc.getElementById('statusMessage'), historyView: doc.getElementById('historyView'),
       trashView: doc.getElementById('trashView'), settingsView: doc.getElementById('settingsView'),
       list: doc.getElementById('historyList'), resultSummary: doc.getElementById('resultSummary'),
       pageSummary: doc.getElementById('pageSummary'), pageSize: doc.getElementById('pageSizeSelect'),
@@ -1268,8 +1266,7 @@
 
     async function initialize() {
       const params = new URLSearchParams(root.location.search);
-      const noticeRequest = sendMessage({ type: 'get-migration-notice' }).catch(() => null);
-      const migrationSettingsRequest = sendMessage({ type: 'get-settings' }).catch(() => null);
+      const settingsRequest = sendMessage({ type: 'get-settings' }).catch(() => null);
       try {
         const modeResponse = await sendMessage({ type: 'get-current-mode' });
         state.mode = modeResponse.mode === 'incognito' ? 'incognito' : 'normal';
@@ -1286,14 +1283,9 @@
       }
       elements.search.value = state.query; elements.pageSize.value = String(state.pageSize);
       await switchView(state.view, { replace: true, resetPage: false });
-      const [noticeResponse, settingsResponse] = await Promise.all([noticeRequest, migrationSettingsRequest]);
+      const settingsResponse = await settingsRequest;
       if (!settingsResponse || !settingsResponse.settings) return;
       syncSettings(settingsResponse.settings);
-      if (noticeResponse && noticeResponse.notice) {
-        elements.migrationNotice.textContent = t('migrationNotice', { count: Number(noticeResponse.notice.skippedEvents) || 0 });
-        elements.migrationNotice.hidden = false;
-        try { await sendMessage({ type: 'acknowledge-migration-notice', id: noticeResponse.notice.id }); } catch (_) { /* Retry on the next UI open. */ }
-      }
     }
     initialize();
   }

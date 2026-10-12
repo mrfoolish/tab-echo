@@ -50,16 +50,18 @@ test('English and Chinese READMEs document the shipped product contract', () => 
     'README.zh.md', '10', '10,000', '3 days', 'unlimited', 'Trash',
     'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
     'npm test', 'npm run check', 'alarms', 'storage', 'tabs',
-    'Allow in Incognito', 'split', 'migration', 'confirmation',
+    'Allow in Incognito', 'split', 'confirmation',
   ]) assert.match(en, new RegExp(escapeRegExp(required), 'i'), `README.md must mention ${required}`);
   for (const required of [
     'README.md', '10', '10,000', '3 天', '不限制', '回收站',
     'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',
     'npm test', 'npm run check', 'alarms', 'storage', 'tabs',
-    '允许在无痕模式下运行', 'split', '迁移', '页面内二阶段确认',
+    '允许在无痕模式下运行', 'split', '页面内二阶段确认',
   ]) assert.match(zh, new RegExp(escapeRegExp(required), 'i'), `README.zh.md must mention ${required}`);
   assert.doesNotMatch(en, /Restore (?:one|a|the|grouped).*tab/i);
+  assert.doesNotMatch(en, /data migration|legacy|65,?536|indexeddb-migration/i);
   assert.doesNotMatch(zh, /恢复(?:单个|一组|标签页|网页)|普通模式|当前模式|按标题或 URL/);
+  assert.doesNotMatch(zh, /数据迁移|旧版本地数据|65,?536|indexeddb-migration/i);
 });
 
 test('package scripts expose dependency-free test and check commands', () => {
@@ -68,6 +70,26 @@ test('package scripts expose dependency-free test and check commands', () => {
   assert.equal(pkg.scripts.test, 'node --test tests/*.test.js');
   assert.match(pkg.scripts.check, /check:js/);
   assert.match(pkg.scripts.check, /check:manifest/);
+});
+
+test('production has no unreleased migration compatibility', () => {
+  const productionFiles = [
+    'extension/background.js',
+    'extension/lib/storage-repository.js',
+    'extension/lib/indexeddb-storage-repository.js',
+    'extension/popup.js',
+    'extension/popup.html',
+    'extension/dashboard.js',
+    'extension/dashboard.html',
+  ];
+  const productionSource = productionFiles.map(read).join('\n');
+  for (const forbidden of [
+    'tabEchoState', 'migration-notice', 'migrateLegacyState', 'indexeddb-migration.js',
+  ]) {
+    assert.doesNotMatch(productionSource, new RegExp(escapeRegExp(forbidden)));
+  }
+  assert.doesNotMatch(read('extension/popup.html'), /id="migrationNotice"/);
+  assert.doesNotMatch(read('extension/dashboard.html'), /id="migrationNotice"/);
 });
 
 test('product docs describe separate storage pools without a combined quota', () => {
@@ -116,14 +138,23 @@ test('manual acceptance distinguishes automated preflight from remaining manual 
   ]) assert.match(manual, new RegExp(escapeRegExp(scenario)), `manual acceptance must cover ${scenario}`);
 });
 
-test('manual acceptance covers the implemented one-time migration notice', () => {
+test('manual acceptance covers immediate ordinary closes and whole-window groups', () => {
   const manual = read('docs/testing/2026-09-18-manual-acceptance.md');
-  assert.match(manual, /一次性迁移提示/);
-  assert.match(manual, /首次从 legacy 成功迁移/);
-  assert.match(manual, /损坏记录无法恢复/);
-  assert.match(manual, /再次打开不重复/);
-  assert.doesNotMatch(manual, /当前实现缺口/);
-  assert.doesNotMatch(manual, /现阶段预期不能通过/);
+  assert.match(manual, /关闭后立即可见/);
+  assert.match(manual, /连续单独关闭两个标签页[^\n]*两条独立记录/);
+  assert.match(manual, /关闭整个窗口[^\n]*一个 Group/);
+  assert.doesNotMatch(manual, /迁移提示|legacy|65536|Migration notice/);
+});
+
+test('current product docs describe final storage and close-capture behavior only', () => {
+  const productDocs = [
+    read('proposal.md'),
+    read('docs/adr/0003-keep-incognito-records-out-of-indexeddb.md'),
+  ].join('\n');
+  assert.match(productDocs, /普通标签页关闭后立即生成一条独立记录/);
+  assert.match(productDocs, /只有关闭整个窗口时才生成 Group/);
+  assert.match(productDocs, /generation pointer[^\n]*唯一权威/);
+  assert.doesNotMatch(productDocs, /tabEchoState|快速连续关闭[^\n]*聚合|generation 和 marker|迁回 local/);
 });
 
 test('only irreversible bulk actions and destructive settings require inline confirmation', () => {

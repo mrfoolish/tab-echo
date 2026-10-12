@@ -89,8 +89,6 @@ h1 { font-size: 19px; font-weight: 720; line-height: 1.1; letter-spacing: -.035e
 .status-message:empty { display: none; }
 .status-message.is-error { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); color: var(--danger); background: var(--danger-soft); }
 .status-message.is-error::before { content: "!"; }
-.migration-notice { margin: 0 0 8px; padding: 9px 11px; border-left: 3px solid var(--accent); border-radius: 6px; color: var(--ink); background: var(--accent-soft); font-size: 11.5px; }
-.migration-notice[hidden] { display: none; }
 .history-list { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 1px 0 rgb(30 38 52 / 2%); }
 .event-row { min-height: 54px; gap: 9px; padding: 9px 9px 9px 12px; border-bottom: 1px solid var(--line); transition: background 160ms ease; }
 .event-row:hover { background: var(--soft); }

@@ -43,7 +43,7 @@ test('dashboard declares localized navigation, search, status, paging, and setti
   assert.match(html, /id="dashboardNav"/);
   assert.match(html, /id="searchInput"[^>]+type="search"/);
   assert.match(html, /id="statusMessage"[^>]+role="status"[^>]+aria-live="polite"/);
-  assert.match(html, /id="migrationNotice"[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.doesNotMatch(html + '\n' + js, /migrationNotice|migration-notice/);
   assert.match(html, /id="historyList"[^>]+aria-busy="true"/);
   assert.match(html, /id="pageSizeSelect"/);
   assert.match(html, /id="moveHistoryButton"/);
@@ -95,81 +95,6 @@ test('storage pressure panel separates regular records from local incognito and 
   assert.match(js, /localStorageLabel: '无痕关闭记录'/);
 });
 
-test('Dashboard renders the localized migration notice before acknowledging it once', async () => {
-  const listeners = {}; const nodes = new Map(); const messages = [];
-  function node(id = '') {
-    if (nodes.has(id)) return nodes.get(id);
-    const value = { id, dataset: {}, hidden: false, disabled: false, value: '', textContent: '', children: [], elements: {},
-      classList: { toggle() {} }, addEventListener(type, handler) { listeners[`${id}:${type}`] = handler; },
-      setAttribute() {}, removeAttribute() {}, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; },
-      querySelectorAll() { return []; }, closest() { return { hidden: false }; }, focus() {},
-    }; nodes.set(id, value); return value;
-  }
-  const form = node('settingsForm');
-  form.elements = Object.fromEntries(['maxRecords', 'maxAgeDays', 'trashMaxAgeDays'].map((name) => [name, node(name)]));
-  const document = { documentElement: { dataset: {} }, title: '', getElementById: node, querySelectorAll() { return []; },
-    addEventListener(type, handler) { listeners[`document:${type}`] = handler; }, createElement() { return node(); }, createTextNode(value) { return { value }; } };
-  const notice = { id: 'notice-dashboard', version: 2, skippedEvents: 2, createdAt: 12345 };
-  const settings = { maxRecords: 10, maxAgeDays: null, trashMaxAgeDays: 3, pageSize: 50, language: 'zh', theme: 'system' };
-  const context = { document, URL, URLSearchParams, Event, setTimeout, clearTimeout, confirm: () => true,
-    location: { search: '?view=settings', pathname: '/dashboard.html' }, history: { replaceState() {}, pushState() {} },
-    addEventListener(type, handler) { listeners[`window:${type}`] = handler; }, chrome: { runtime: { async sendMessage(message) {
-      messages.push(structuredClone(message));
-      if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
-      if (message.type === 'get-settings') return { ok: true, mode: 'normal', settings };
-      if (message.type === 'get-migration-notice') return { ok: true, notice };
-      if (message.type === 'acknowledge-migration-notice') {
-        assert.equal(node('migrationNotice').textContent, '已迁移现有关闭记录，其中 2 条损坏记录无法恢复。');
-        assert.equal(node('migrationNotice').hidden, false);
-        return { ok: true, acknowledged: true };
-      }
-      return { ok: true };
-    } }, storage: { session: { async get() { return {}; }, async set() {} } } } };
-  context.globalThis = context; vm.runInNewContext(js, context);
-  await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
-
-  assert.deepEqual(messages.filter((message) => /migration-notice/.test(message.type)), [
-    { type: 'get-migration-notice' }, { type: 'acknowledge-migration-notice', id: notice.id },
-  ]);
-});
-
-test('Dashboard does not display or acknowledge notice when its independent settings request fails', () => {
-  assert.match(js, /get-migration-notice/);
-  assert.match(js, /get-settings/);
-  assert.match(js, /noticeResponse, settingsResponse/);
-  assert.ok(js.includes('if (!settingsResponse || !settingsResponse.settings) return;'));
-});
-
-test('Dashboard VM keeps the migration banner hidden and unacknowledged when settings fail', async () => {
-  const listeners = {}; const nodes = new Map(); const messages = [];
-  function node(id = '') {
-    if (nodes.has(id)) return nodes.get(id);
-    const value = { id, dataset: {}, hidden: id === 'migrationNotice', disabled: false, value: '', textContent: '', children: [], elements: {},
-      classList: { toggle() {} }, addEventListener(type, handler) { listeners[`${id}:${type}`] = handler; },
-      setAttribute() {}, removeAttribute() {}, append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; },
-      querySelectorAll() { return []; }, closest() { return { hidden: false }; }, focus() {},
-    }; nodes.set(id, value); return value;
-  }
-  node('settingsForm').elements = Object.fromEntries(['maxRecords', 'maxAgeDays', 'trashMaxAgeDays'].map((name) => [name, node(name)]));
-  const document = { documentElement: { dataset: {} }, title: '', getElementById: node, querySelectorAll() { return []; },
-    addEventListener(type, handler) { listeners[`document:${type}`] = handler; }, createElement() { return node(); }, createTextNode(value) { return { value }; } };
-  const empty = { ok: true, mode: 'normal', settings: { language: 'en', theme: 'system', pageSize: 50 }, results: [],
-    totalEventCount: 0, totalTabCount: 0, resultEventCount: 0, matchedTabCount: 0 };
-  const context = { document, URL, URLSearchParams, Event, setTimeout, clearTimeout, confirm: () => true,
-    location: { search: '?view=history', pathname: '/dashboard.html' }, history: { replaceState() {}, pushState() {} },
-    addEventListener(type, handler) { listeners[`window:${type}`] = handler; }, chrome: { runtime: { async sendMessage(message) {
-      messages.push(structuredClone(message));
-      if (message.type === 'get-migration-notice') return { ok: true, notice: { id: 'retry', version: 2, skippedEvents: 1, createdAt: 1 } };
-      if (message.type === 'get-settings') throw new Error('settings failed');
-      if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
-      return empty;
-    } }, storage: { session: { async get() { return {}; }, async set() {} } } } };
-  context.globalThis = context; vm.runInNewContext(js, context);
-  await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(node('migrationNotice').hidden, true);
-  assert.equal(messages.some((message) => message.type === 'acknowledge-migration-notice'), false);
-});
-
 test('Settings storage health loads independently and refreshes after a successful save', async () => {
   const listeners = {}; const nodes = new Map(); const messages = [];
   function node(id = '') {
@@ -197,7 +122,6 @@ test('Settings storage health loads independently and refreshes after a successf
       if (message.type === 'get-current-mode') return { ok: true, mode: 'normal' };
       if (message.type === 'get-settings') return { ok: true, mode: 'normal', settings };
       if (message.type === 'get-storage-health') return health;
-      if (message.type === 'get-migration-notice') return { ok: true, notice: null };
       if (message.type === 'preview-settings-impact') return { ok: true, settings, impact: {} };
       if (message.type === 'save-settings') return { ok: true, settings };
       return { ok: true };
@@ -588,7 +512,6 @@ test('browser UMD passes its root to the factory and starts in a browser-like VM
   assert.ok(context.TabEchoDashboard);
   assert.equal(typeof listeners['dashboardNav:click'], 'function');
   assert.equal(typeof listeners['window:popstate'], 'function');
-  assert.deepEqual(messages.map((message) => message.type), ['get-migration-notice', 'get-settings', 'get-current-mode', 'get-storage-health', 'get-settings']);
 });
 
 test('browser VM guards stale Trash actions, restores explicit ids, and Empty Trash uses inline confirmation', async () => {
