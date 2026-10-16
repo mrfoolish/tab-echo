@@ -38,6 +38,8 @@
       partialReopen: 'Reopened {count} tab(s); {failed} failed.', requestFailed: 'Operation failed. Please try again.',
       actionStale: 'Records changed after this preview. Nothing was removed; please review and confirm again.',
       storageWriteFailed: 'Could not save data to browser storage. Check available space and try again.',
+      indexedDbUnavailable: 'Regular closed-tab storage is unavailable. Reload the extension and try again.',
+      settingsReadOnlyIncognito: 'Shared settings can only be changed in a regular window.',
       invalidExcludedDomains: 'Enter valid hostnames only, one per line.',
       restoreEntry: 'Move back to Closed tabs', restoreResults: 'Move all back to Closed tabs', restoreSearchResults: 'Move back {count} results', deletePermanently: 'Remove now',
       emptyTrash: 'Empty Trash', trashListLabel: 'Trash entries', trashPaginationLabel: 'Trash pagination',
@@ -48,7 +50,7 @@
       confirmEmptyOne: 'Empty Trash? This cannot be undone.', confirmEmptyTwo: 'Confirm permanent deletion of every Trash entry. This cannot be undone.',
       capacityError: 'Not enough history capacity. Free {count} more slot(s) before restoring.',
       settingsIntro: 'Manage retention, display, appearance, and exclusions.', settingsLoading: 'Loading settings…', settingsSaved: 'Settings saved.',
-      settingsScope: 'Settings are shared. This preview only counts data in the current {mode}. The other browsing context applies the same settings later.',
+      settingsScope: 'Settings are shared. This preview counts regular-window data; incognito records apply the same rules later.',
       retentionSection: 'Storage and cleanup', displaySection: 'Toolbar popup', appearanceSection: 'Appearance and language', exclusionsSection: 'Excluded domains',
       storageHealthTitle: 'Storage pressure', regularStorageLabel: 'Regular closed records', localStorageLabel: 'Incognito closed records',
       storageNormal: 'Normal', storageElevated: 'Elevated', storageWarning: 'Running low', storageCritical: 'Almost full', storageUnknown: 'Unavailable',
@@ -98,6 +100,8 @@
       partialReopen: '已重新打开 {count} 个标签页；{failed} 个失败。', requestFailed: '操作失败，请重试。',
       actionStale: '预览后记录已发生变化，本次没有移除任何内容，请重新确认。',
       storageWriteFailed: '无法将数据保存到浏览器存储空间，请检查可用空间后重试。',
+      indexedDbUnavailable: '常规关闭记录存储暂不可用，请重新加载扩展后重试。',
+      settingsReadOnlyIncognito: '共享设置只能在常规窗口中修改。',
       invalidExcludedDomains: '请仅填写有效域名，每行一个。',
       restoreEntry: '移回关闭记录', restoreResults: '全部移回关闭记录', restoreSearchResults: '移回 {count} 条搜索结果', deletePermanently: '直接移除',
       emptyTrash: '清空回收站', trashListLabel: '回收站记录', trashPaginationLabel: '回收站分页',
@@ -108,7 +112,7 @@
       confirmEmptyOne: '确定清空回收站吗？此操作不可恢复。', confirmEmptyTwo: '再次确认：永久删除回收站中的全部记录，此操作不可恢复。',
       capacityError: '历史容量不足，还需腾出 {count} 个可用名额才能恢复。',
       settingsIntro: '管理保存规则、工具栏弹窗、外观和排除域名。', settingsLoading: '正在加载设置…', settingsSaved: '设置已保存。',
-      settingsScope: '设置在常规与无痕上下文间共享；本次预览只统计当前{mode}的数据，另一浏览上下文会在之后应用相同设置。',
+      settingsScope: '设置在常规与无痕上下文间共享；本次预览只统计常规窗口数据，无痕记录会在之后应用相同规则。',
       retentionSection: '保存与清理', displaySection: '工具栏弹窗', appearanceSection: '外观与语言', exclusionsSection: '排除域名',
       storageHealthTitle: '存储空间', regularStorageLabel: '常规关闭记录', localStorageLabel: '无痕关闭记录',
       storageNormal: '空间充足', storageElevated: '占用偏高', storageWarning: '空间紧张', storageCritical: '空间将满', storageUnknown: '暂不可用',
@@ -431,7 +435,10 @@
 
     function errorMessage(error) {
       if (error && ['ACTION_STALE', 'ACTION_TOKEN_INVALID', 'ACTION_TOKEN_EXPIRED'].includes(error.code)) return t('actionStale');
-      return t(error && error.code === 'STORAGE_WRITE_FAILED' ? 'storageWriteFailed' : 'requestFailed');
+      if (error && error.code === 'STORAGE_WRITE_FAILED') return t('storageWriteFailed');
+      if (error && error.code === 'INDEXEDDB_UNAVAILABLE') return t('indexedDbUnavailable');
+      if (error && error.code === 'SETTINGS_READ_ONLY_INCOGNITO') return t('settingsReadOnlyIncognito');
+      return t('requestFailed');
     }
 
     function showError(error) {
@@ -853,6 +860,20 @@
       localize();
     }
 
+    function applySettingsWriteAccess() {
+      const readOnly = state.mode === 'incognito';
+      if (readOnly) {
+        elements.settingsForm.querySelectorAll('input, select, textarea, button')
+          .forEach((control) => { control.disabled = true; });
+        clearSettingsImpact();
+      } else {
+        elements.settingsForm.querySelectorAll('input, select, textarea')
+          .forEach((control) => { control.disabled = false; });
+      }
+      elements.saveSettings.disabled = readOnly;
+      return readOnly;
+    }
+
     async function refreshHistory() {
       const data = state.history; const token = ++data.token;
       const requestedQuery = state.query;
@@ -960,7 +981,7 @@
       const hasRetention = retention.totalEvents > 0; const hasExclusions = exclusions.totalEvents > 0;
       state.pendingSettingsConfirmation = { settings: { ...settings }, impact, hasRetention, hasExclusions, token };
       const messages = [];
-      messages.push(t('settingsScope', { mode: t(state.mode === 'incognito' ? 'incognitoMode' : 'regularMode') }));
+      messages.push(t('settingsScope'));
       if (hasRetention) messages.push(t('settingsImpactWarning', retention));
       if (hasExclusions) messages.push(t('exclusionImpactWarning', { events: exclusions.totalEvents, tabs: exclusions.historyTabs + exclusions.trashTabs }));
       elements.settingsImpactMessage.textContent = messages.join(' ');
@@ -1031,7 +1052,9 @@
       try {
         const response = await sendMessage({ type: 'get-settings' }); if (token !== state.settingsRequestToken || state.view !== 'settings') return;
         state.mode = response.mode === 'incognito' ? 'incognito' : 'normal'; syncSettings(response.settings); clearSettingsErrors();
-        elements.settingsForm.setAttribute('aria-busy', 'false'); elements.saveSettings.disabled = false; elements.settingsSummary.textContent = t('settingsIntro');
+        elements.settingsForm.setAttribute('aria-busy', 'false');
+        const readOnly = applySettingsWriteAccess();
+        elements.settingsSummary.textContent = t(readOnly ? 'settingsReadOnlyIncognito' : 'settingsIntro');
       } catch (error) { if (token === state.settingsRequestToken && state.view === 'settings') { const message = errorMessage(error); elements.settingsForm.setAttribute('aria-busy', 'false'); elements.settingsSummary.textContent = message; showStatus(message, true); } }
     }
 

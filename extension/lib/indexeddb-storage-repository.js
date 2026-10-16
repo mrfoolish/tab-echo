@@ -96,7 +96,7 @@
     }
 
     function createIndexedDbStorageRepository(storageArea, recordStore, options = {}) {
-      const legacyRepository = options.legacyRepository || createStorageRepository(storageArea, options);
+      const localRepository = options.localRepository || createStorageRepository(storageArea, options);
       const indexedModes = new Set(Array.isArray(options.indexedModes)
         ? options.indexedModes.filter((mode) => MODES.includes(mode)) : MODES);
       const retryLimit = Number.isSafeInteger(options.retryLimit) && options.retryLimit >= 0
@@ -175,7 +175,7 @@
       async function readContext(mode) {
         const activeMode = assertMode(mode);
         return readStable(activeMode, async (metadata) => {
-          if (!metadata.managed) return legacyRepository.readContext(activeMode);
+          if (!metadata.managed) return localRepository.readContext(activeMode);
           if (!metadata.indexed) {
             return {
               settings: metadata.settings,
@@ -204,7 +204,7 @@
         return readStable(activeMode, async (metadata) => {
           if (!metadata.managed) {
             return storeName === 'history'
-              ? legacyRepository.readHistory(activeMode) : legacyRepository.readTrash(activeMode);
+              ? localRepository.readHistory(activeMode) : localRepository.readTrash(activeMode);
           }
           if (!metadata.indexed) return [];
           const records = await recordStore.readGeneration(storeName, activeMode, metadata.generation);
@@ -220,10 +220,10 @@
         return readStable(activeMode, async (metadata) => {
           if (!metadata.managed || !metadata.indexed
             || typeof recordStore.scanGenerationPage !== 'function') {
-            const legacyContext = metadata.managed
-              ? null : await legacyRepository.readContext(activeMode);
+            const localContext = metadata.managed
+              ? null : await localRepository.readContext(activeMode);
             const stored = !metadata.managed
-              ? legacyContext[storeName]
+              ? localContext[storeName]
               : metadata.indexed
                 ? await recordStore.readGeneration(storeName, activeMode, metadata.generation)
                 : [];
@@ -234,8 +234,8 @@
             const results = historyStore.buildSearchResults(source, query, { deduplicateSingles: false });
             const totalTabs = historyStore.countTabs(source);
             return {
-              settings: legacyContext ? legacyContext.settings : metadata.settings,
-              revision: legacyContext ? legacyContext.revision : metadata.revision,
+              settings: localContext ? localContext.settings : metadata.settings,
+              revision: localContext ? localContext.revision : metadata.revision,
               results: results.slice(offset, offset + limit),
               statistics: {
                 totalRecords: source.length,
@@ -296,17 +296,17 @@
           if (metadata.indexed && typeof recordStore.scanGeneration === 'function') {
             await recordStore.scanGeneration('history', activeMode, metadata.generation, visit);
           } else {
-            const legacyContext = metadata.managed
-              ? null : await legacyRepository.readContext(activeMode);
+            const localContext = metadata.managed
+              ? null : await localRepository.readContext(activeMode);
             const stored = !metadata.managed
-              ? legacyContext.history
+              ? localContext.history
               : metadata.indexed
                 ? await recordStore.readGeneration('history', activeMode, metadata.generation)
                 : [];
             stored.slice().sort((left, right) => right.closedAt - left.closedAt).forEach(visit);
-            if (legacyContext) {
-              metadata.settings = legacyContext.settings;
-              metadata.revision = legacyContext.revision;
+            if (localContext) {
+              metadata.settings = localContext.settings;
+              metadata.revision = localContext.revision;
             }
           }
           const domainPage = domainQuery.finish();
@@ -450,19 +450,19 @@
       }
 
       return {
-        getSettings: (...args) => legacyRepository.getSettings(...args),
+        getSettings: (...args) => localRepository.getSettings(...args),
         readContext,
         readHistory: (mode) => readCollection('history', mode),
         readTrash: (mode) => readCollection('trash', mode),
         queryCollection,
         queryHistoryByDomain,
-        saveSettings: (...args) => legacyRepository.saveSettings(...args),
+        saveSettings: (...args) => localRepository.saveSettings(...args),
         updateContext: (mode, mutator) => indexedModes.has(assertMode(mode))
           ? enqueue(mode, () => performUpdate(mode, mutator, false))
-          : legacyRepository.updateContext(mode, mutator),
+          : localRepository.updateContext(mode, mutator),
         updateSettingsAndContext: (mode, mutator) => indexedModes.has(assertMode(mode))
           ? enqueue(mode, () => performUpdate(mode, mutator, true))
-          : legacyRepository.updateSettingsAndContext(mode, mutator),
+          : localRepository.updateSettingsAndContext(mode, mutator),
       };
     }
 

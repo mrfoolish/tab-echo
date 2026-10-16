@@ -119,6 +119,29 @@
     return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
   }
 
+  function createUnavailableStorageRepository(options = {}) {
+    const code = typeof options.code === 'string' && options.code
+      ? options.code : 'STORAGE_UNAVAILABLE';
+    const message = typeof options.message === 'string' && options.message
+      ? options.message : 'Storage is unavailable.';
+    async function unavailable() {
+      const error = new Error(message);
+      error.code = code;
+      throw error;
+    }
+    return {
+      getSettings: unavailable,
+      readContext: unavailable,
+      readHistory: unavailable,
+      readTrash: unavailable,
+      queryCollection: unavailable,
+      queryHistoryByDomain: unavailable,
+      saveSettings: unavailable,
+      updateContext: unavailable,
+      updateSettingsAndContext: unavailable,
+    };
+  }
+
   function createStorageRepository(storageArea, options = {}) {
     validateStorageArea(storageArea);
     const retryLimit = Number.isSafeInteger(options.retryLimit) && options.retryLimit >= 0
@@ -318,6 +341,7 @@
     STORAGE_KEYS,
     SettingsValidationError,
     StorageWriteError,
+    createUnavailableStorageRepository,
     createStorageRepository,
   };
 });

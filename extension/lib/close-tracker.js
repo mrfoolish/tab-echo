@@ -97,17 +97,19 @@
       revision += 1;
       const payload = { [key]: { ...clone(value), revision } };
       // chrome.storage.session is cleared when Chrome exits. Keep the same revision in
-      // local storage so a forced exit can recover the last live window snapshots.
-      await localArea.set(payload);
-      if (!useLocal) {
-        try {
-          await sessionArea.set(payload);
-          return;
-        } catch (error) {
-          useLocal = true;
-        }
+      // local storage so a forced exit can recover the last live window snapshots. The
+      // mirrors are independent: either one may keep the current state available when the
+      // other storage area is temporarily unavailable or full.
+      const writes = [Promise.resolve().then(() => localArea.set(payload))];
+      const sessionWritable = sessionArea && typeof sessionArea.set === 'function';
+      if (sessionWritable) writes.push(Promise.resolve().then(() => sessionArea.set(payload)));
+      const [localWrite, sessionWrite = { status: 'rejected', reason: new Error('Session unavailable.') }]
+        = await Promise.allSettled(writes);
+      if (localWrite.status === 'rejected' && sessionWrite.status === 'rejected') {
+        throw localWrite.reason;
       }
-      if (sessionArea && typeof sessionArea.remove === 'function') {
+      if (localWrite.status === 'fulfilled' && sessionWrite.status === 'rejected'
+        && sessionArea && typeof sessionArea.remove === 'function') {
         await Promise.resolve(sessionArea.remove(key)).catch(() => undefined);
       }
     }

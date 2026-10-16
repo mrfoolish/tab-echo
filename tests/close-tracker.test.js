@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { indexedDbModuleStubs } = require('./test-helpers.js');
 
 const { createCloseTracker, createTrackerPersistence } = require('../extension/lib/close-tracker.js');
 const { deleteEvent, getRestoreUrls } = require('../extension/lib/history-store.js');
@@ -428,6 +429,22 @@ test('tracker persistence mirrors successful session writes to local for browser
   assert.deepEqual(local.values[key].windowSnapshotsById['10'].tabIds, ['1']);
 });
 
+test('tracker persistence keeps the current-session mirror when local storage rejects', async () => {
+  const key = 'tracker:normal';
+  const session = memoryArea();
+  const local = memoryArea({}, { set: 'local quota exceeded' });
+  const persistence = createTrackerPersistence(session, local, key);
+
+  await persistence.load();
+  await assert.doesNotReject(persistence.save({ pendingEventsById: { one: { commitKey: 'one' } } }));
+
+  assert.deepEqual(session.values[key], {
+    revision: 1,
+    pendingEventsById: { one: { commitKey: 'one' } },
+  });
+  assert.equal(local.values[key], undefined);
+});
+
 test('tracker persistence reports when an empty session recovers a local browser snapshot', async () => {
   const key = 'tracker:normal';
   const session = memoryArea();
@@ -492,7 +509,7 @@ test('tracker persistence tolerates one read failure and treats legacy state as 
   assert.equal((await createTrackerPersistence(validSession, localFailure, key).load()).source, 'session');
 });
 
-test('tracker persistence keeps the latest local mirror when a later session write fails', async () => {
+test('tracker persistence retries the session mirror after a transient write failure', async () => {
   const key = 'tracker:normal';
   let sessionSetCalls = 0;
   const session = memoryArea({ [key]: { revision: 1, marker: 'S1' } });
@@ -507,8 +524,9 @@ test('tracker persistence keeps the latest local mirror when a later session wri
 
   await persistence.save({ marker: 'S2' });
   await persistence.save({ marker: 'L3' });
-  assert.deepEqual(local.values[key], { revision: 3, marker: 'L3' });
-  assert.equal(session.values[key], undefined);
+  await persistence.save({ marker: 'S4' });
+  assert.deepEqual(local.values[key], { revision: 4, marker: 'S4' });
+  assert.deepEqual(session.values[key], { revision: 4, marker: 'S4' });
 });
 
 test('tracker persistence keeps identical revisions in session and local after a successful save', async () => {
@@ -533,6 +551,7 @@ test('background initialization retries after failure without concurrent duplica
   const context = {
     clearTimeout, setTimeout, structuredClone, console: { error() {} },
     self: {
+      ...indexedDbModuleStubs(),
       TabEchoHistoryStore: require('../extension/lib/history-store.js'),
       TabEchoDomainGroups: require('../extension/lib/domain-groups.js'),
       TabEchoStorageRepository: { createStorageRepository() {

@@ -184,9 +184,57 @@ test('Popup renders compact relative close times for single and grouped events w
     assert.equal(time.textContent, '5 minutes ago');
     assert.equal(time.title, '');
     assert.equal(time.dataset.fullTime, timeFormat.formatFullTime(closedAt, 'en'));
+    assert.equal(time.dataset.tooltip, time.dataset.fullTime);
     assert.equal(time['aria-label'], time.dataset.fullTime);
     assert.equal(time.datetime, new Date(closedAt).toISOString());
   }
+});
+
+test('Popup collapses groups by default and exposes an accessible disclosure', async () => {
+  const group = result('group', [
+    { id: 'one', title: 'One', url: 'https://one.example/' },
+    { id: 'two', title: 'Two', url: 'https://two.example/' },
+  ]);
+  const app = createVm(async (message) => message.type === 'get-trash'
+    ? { ok: true, results: [], resultEventCount: 0 }
+    : { ok: true, mode: 'normal', settings: { language: 'en' }, results: [group], resultEventCount: 1 });
+
+  app.listeners['document:DOMContentLoaded'](); await settle();
+  let rendered = flatten(app.nodes.get('historyList'));
+  let toggle = rendered.find((node) => node.dataset.action === 'toggle-group');
+  let details = rendered.find((node) => node.className === 'event-details');
+  assert.ok(toggle);
+  assert.equal(toggle['aria-expanded'], 'false');
+  assert.equal(toggle['aria-controls'], details.id);
+  assert.equal(details.hidden, true);
+
+  toggle.closest = () => toggle;
+  await app.listeners['historyList:click']({ target: toggle });
+  rendered = flatten(app.nodes.get('historyList'));
+  toggle = rendered.find((node) => node.dataset.action === 'toggle-group');
+  details = rendered.find((node) => node.className === 'event-details');
+  assert.equal(toggle['aria-expanded'], 'true');
+  assert.equal(details.hidden, false);
+});
+
+test('Popup positions the close-time tooltip beside the hovered time', async () => {
+  const app = createVm(async (message) => message.type === 'get-trash'
+    ? { ok: true, results: [], resultEventCount: 0 }
+    : { ok: true, mode: 'normal', settings: { language: 'en' }, results: [result('one')], resultEventCount: 1 });
+  app.listeners['document:DOMContentLoaded'](); await settle();
+  const time = flatten(app.nodes.get('historyList')).find((node) => node.localName === 'time');
+  const tooltip = app.nodes.get('actionTooltip');
+  time.closest = () => time;
+  time.getBoundingClientRect = () => ({ left: 300, top: 400, right: 360, bottom: 414, width: 60, height: 14 });
+  tooltip.getBoundingClientRect = () => ({ left: 0, top: 0, right: 180, bottom: 40, width: 180, height: 40 });
+
+  app.listeners['historyList:pointerover']({ target: time });
+
+  assert.equal(tooltip.hidden, false);
+  assert.equal(tooltip.textContent, time.dataset.fullTime);
+  assert.equal(tooltip.style.left, '212px');
+  assert.equal(tooltip.style.top, '352px');
+  assert.equal(time['aria-describedby'], 'actionTooltip');
 });
 
 test('Popup keeps the bulk action tooltip inside the visible popup bounds', async () => {
@@ -436,6 +484,8 @@ test('VM keeps newest query and renders only matched group children with complet
   const old = app.context.TabEchoPopup.refresh('old'); await settle();
   await app.context.TabEchoPopup.refresh('needle'); oldResolve(); await old;
   const rendered = flatten(app.nodes.get('historyList'));
+  const details = rendered.find((node) => node.className === 'event-details');
+  assert.equal(details.hidden, false);
   assert.ok(rendered.some((node) => node.textContent === 'Needle'));
   assert.ok(!rendered.some((node) => node.textContent === 'Other'));
   assert.ok(!rendered.some((node) => node.textContent === 'Title old'));
@@ -495,6 +545,19 @@ test('history load localizes a structured storage failure', async () => {
     : { ok: false, error: { code: 'STORAGE_WRITE_FAILED', message: 'raw detail' } });
   app.listeners['document:DOMContentLoaded'](); await settle();
   assert.equal(app.nodes.get('statusMessage').textContent, 'Could not save data to browser storage. Check available space and try again.');
+});
+
+test('history load explains when regular IndexedDB storage is unavailable', async () => {
+  const app = createVm(async (message) => message.type === 'get-trash'
+    ? { ok: true, results: [], resultEventCount: 0 }
+    : { ok: false, error: { code: 'INDEXEDDB_UNAVAILABLE', message: 'raw IndexedDB detail' } });
+
+  app.listeners['document:DOMContentLoaded']();
+  await settle();
+
+  assert.equal(app.nodes.get('statusMessage').textContent,
+    'Regular closed-tab storage is unavailable. Reload the extension and try again.');
+  assert.equal(app.nodes.get('statusMessage').textContent.includes('raw IndexedDB detail'), false);
 });
 
 test('input immediately invalidates loaded results and guards every result-dependent action until loaded', async () => {

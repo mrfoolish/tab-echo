@@ -54,7 +54,7 @@ tab-echo/
 Tab Echo 没有一个可以安全相加的统一总容量：
 
 - 常规关闭记录和回收站使用 IndexedDB，其配额由 Chrome 根据扩展源、设备空间和浏览器策略动态计算。
-- 无痕关闭记录、共享设置和追踪快照使用 `chrome.storage.local`，受 Chrome 暴露的独立固定配额限制。
+- 无痕关闭记录、共享设置和追踪快照使用 `chrome.storage.local`，受 Chrome 暴露的独立固定配额限制；设置页的无痕记录指标只计入无痕历史和无痕回收站。
 
 两个存储池不能互相借用空间。因此 UI 不显示合计容量，也不使用合计后的百分比。总体压力等级取两个存储池中更高的一项。
 
@@ -87,7 +87,7 @@ Tab Echo 没有一个可以安全相加的统一总容量：
 约束：
 
 - `regularRecords` 优先使用 `navigator.storage.estimate()` 的 IndexedDB 明细和扩展源配额。
-- `localData` 使用 `chrome.storage.local.getBytesInUse(null)` 与 `QUOTA_BYTES`。
+- `localData` 分别测量无痕历史键和无痕回收站键，按 Chrome 配额规则动态扣除各自的“键名 + 空数组 `[]`”基线，再与 `QUOTA_BYTES` 计算比例；不计入共享设置、追踪快照和空集合固定元数据。
 - 缺少任一浏览器能力时，只将对应存储池标记为不支持，不能伪造零占用。
 - 保留现有顶层字段以避免后台测试和其他调用方出现不必要破坏；新增 `pools` 作为设置页的权威结构。
 - 总体 `level` 使用可测量存储池中最高的压力等级。

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { indexedDbModuleStubs } = require('./test-helpers.js');
 
 const extensionDir = path.join(__dirname, '../extension');
 
@@ -19,7 +20,14 @@ function memoryArea(initial = {}, controls = {}) {
   return {
     ...(Number.isFinite(controls.quotaBytes) ? { QUOTA_BYTES: controls.quotaBytes } : {}),
     values, writes, get reads() { return reads; },
-    ...(Number.isFinite(controls.bytesInUse) ? { async getBytesInUse() { return controls.bytesInUse; } } : {}),
+    ...(Number.isFinite(controls.bytesInUse) ? {
+      async getBytesInUse(requestedKeys) {
+        if (typeof requestedKeys === 'string') {
+          return (controls.bytesInUse / 2) + requestedKeys.length + JSON.stringify([]).length;
+        }
+        return controls.bytesInUse;
+      },
+    } : {}),
     async get(keys) {
       reads += 1;
       getKeys.push(structuredClone(keys));
@@ -32,6 +40,7 @@ function memoryArea(initial = {}, controls = {}) {
     },
     async set(items) {
       if (controls.failSet && controls.failSet(items)) throw new Error('forced storage failure');
+      if (controls.beforeSet) await controls.beforeSet(items);
       Object.assign(values, structuredClone(items)); writes.push(structuredClone(items));
       if (controls.afterSet) await controls.afterSet(items);
     },
@@ -56,7 +65,7 @@ const keys = {
   incognitoTrash: 'tabEcho:trash:incognito:v2',
 };
 
-async function loadBackground({ incognito = false, localInitial = {}, localArea, sessionArea, tabs = [], awaitReady = true, queryGate, failCreateUrl, localControls = {}, storageEstimate } = {}) {
+async function loadBackground({ incognito = false, indexedDbAvailable = true, localInitial = {}, localArea, sessionArea, tabs = [], awaitReady = true, queryGate, failCreateUrl, localControls = {}, storageEstimate } = {}) {
   const local = localArea || memoryArea(localInitial, localControls);
   const session = sessionArea || memoryArea();
   const createdAlarms = [];
@@ -107,6 +116,9 @@ async function loadBackground({ incognito = false, localInitial = {}, localArea,
     clearTimeout, setTimeout, structuredClone, URL, console: { error() {} }, chrome, importScripts() {},
     ...(storageEstimate ? { navigator: { storage: { estimate: storageEstimate } } } : {}),
     self: {
+      ...(indexedDbAvailable ? {
+        ...indexedDbModuleStubs(),
+      } : {}),
       TabEchoHistoryStore: require('../extension/lib/history-store.js'),
       TabEchoDomainGroups: require('../extension/lib/domain-groups.js'),
       TabEchoStorageRepository: require('../extension/lib/storage-repository.js'),
@@ -129,6 +141,30 @@ async function loadBackground({ incognito = false, localInitial = {}, localArea,
   }
   return { chrome, local, session, events, createdAlarms, openedTabs, openedWindows, message };
 }
+
+test('normal mode reports IndexedDB unavailable instead of reading legacy local arrays', async () => {
+  const legacy = entry('legacy-local');
+  const subject = await loadBackground({
+    indexedDbAvailable: false,
+    awaitReady: false,
+    localInitial: { [keys.normalHistory]: [legacy] },
+  });
+
+  const result = await subject.message({ type: 'get-history' });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'INDEXEDDB_UNAVAILABLE');
+  assert.deepEqual(subject.local.values[keys.normalHistory], [legacy]);
+});
+
+test('incognito mode keeps using local storage when IndexedDB is unavailable', async () => {
+  const subject = await loadBackground({ incognito: true, indexedDbAvailable: false });
+
+  const result = await subject.message({ type: 'get-current-mode' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, 'incognito');
+});
 
 test('initialization and lifecycle hooks ensure the fixed daily cleanup alarm', async () => {
   const subject = await loadBackground();
@@ -238,6 +274,44 @@ test('ordinary close is immediately visible without waiting for a batch timer', 
   await new Promise((resolve) => setImmediate(resolve));
 
   const history = await subject.message({ type: 'get-history' });
+  assert.equal(history.ok, true);
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, trackedTab.url);
+});
+
+test('history reads wait for an ordinary close already queued for persistence', async () => {
+  let releaseHistoryWrite;
+  let markHistoryWriteStarted;
+  const historyWriteGate = new Promise((resolve) => { releaseHistoryWrite = resolve; });
+  const historyWriteStarted = new Promise((resolve) => { markHistoryWriteStarted = resolve; });
+  const trackedTab = {
+    id: 702, windowId: 70, index: 0, incognito: false,
+    title: 'Queued close', url: 'https://queued-close.example/',
+  };
+  const subject = await loadBackground({ tabs: [trackedTab], localControls: {
+    async beforeSet(items) {
+      if (!Object.hasOwn(items, keys.normalHistory)) return;
+      markHistoryWriteStarted();
+      await historyWriteGate;
+    },
+  } });
+
+  subject.events.removed.listeners[0](trackedTab.id, {
+    windowId: trackedTab.windowId,
+    isWindowClosing: false,
+  });
+  await historyWriteStarted;
+
+  let querySettled = false;
+  const query = subject.message({ type: 'get-history' }).then((result) => {
+    querySettled = true;
+    return result;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(querySettled, false);
+  releaseHistoryWrite();
+  const history = await query;
   assert.equal(history.ok, true);
   assert.equal(history.statistics.totalRecords, 1);
   assert.equal(history.results[0].event.tabs[0].url, trackedTab.url);
@@ -477,6 +551,23 @@ test('save-settings applies patch semantics and preserves omitted retention sett
   });
 });
 
+test('incognito mode exposes shared settings as read-only', async () => {
+  const current = {
+    maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10,
+    pageSize: 50, language: 'en', theme: 'system', excludedDomains: [], settingsVersion: 2,
+  };
+  const subject = await loadBackground({ incognito: true, localInitial: { [keys.settings]: current } });
+
+  const preview = await subject.message({ type: 'preview-settings-impact', settings: { theme: 'dark' } });
+  const save = await subject.message({ type: 'save-settings', settings: { theme: 'dark' } });
+
+  assert.equal(preview.ok, false);
+  assert.equal(preview.error.code, 'SETTINGS_READ_ONLY_INCOGNITO');
+  assert.equal(save.ok, false);
+  assert.equal(save.error.code, 'SETTINGS_READ_ONLY_INCOGNITO');
+  assert.deepEqual(subject.local.values[keys.settings], current);
+});
+
 test('settings preview token atomically saves and optionally removes only newly excluded matches', async () => {
   const current = { maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10, pageSize: 50, language: 'en', theme: 'system', excludedDomains: ['old.test'] };
   const mixed = entry('mixed', 'normal', [
@@ -584,6 +675,50 @@ test('storage health reports quota pressure levels without loading record arrays
     assert.equal(result.ok, true);
     assert.equal(result.level, level, `expected ${ratio} to be ${level}`);
   }
+});
+
+test('storage health measures only incognito history and trash in the incognito pool', async () => {
+  const quotaBytes = 10 * 1024 * 1024;
+  const historyPayloadBytes = 1200;
+  const trashPayloadBytes = 848;
+  const incognitoRecordBytes = historyPayloadBytes + trashPayloadBytes;
+  const allLocalBytes = 7 * 1024 * 1024;
+  const measuredKeys = [];
+  const local = memoryArea({}, { quotaBytes });
+  local.getBytesInUse = async (requestedKeys) => {
+    measuredKeys.push(structuredClone(requestedKeys));
+    const storedBytes = {
+      [keys.incognitoHistory]: keys.incognitoHistory.length + 2 + historyPayloadBytes,
+      [keys.incognitoTrash]: keys.incognitoTrash.length + 2 + trashPayloadBytes,
+    };
+    if (typeof requestedKeys === 'string') return storedBytes[requestedKeys] || 0;
+    if (Array.isArray(requestedKeys)) {
+      return requestedKeys.reduce((total, key) => total + (storedBytes[key] || 0), 0);
+    }
+    return allLocalBytes;
+  };
+  const subject = await loadBackground({ localArea: local });
+
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.deepEqual(measuredKeys, [keys.incognitoHistory, keys.incognitoTrash]);
+  assert.equal(health.pools.localData.bytesUsed, incognitoRecordBytes);
+  assert.equal(health.pools.localData.usageRatio, incognitoRecordBytes / quotaBytes);
+});
+
+test('storage health reports zero bytes for empty incognito history and trash arrays', async () => {
+  const quotaBytes = 10 * 1024 * 1024;
+  const local = memoryArea({}, { quotaBytes });
+  local.getBytesInUse = async (requestedKeys) => {
+    if (typeof requestedKeys === 'string') return requestedKeys.length + 2;
+    return requestedKeys.reduce((total, key) => total + key.length + 2, 0);
+  };
+  const subject = await loadBackground({ localArea: local });
+
+  const health = await subject.message({ type: 'get-storage-health' });
+
+  assert.equal(health.pools.localData.bytesUsed, 0);
+  assert.equal(health.pools.localData.usageRatio, 0);
 });
 
 test('storage health explicitly reports unsupported byte accounting', async () => {
@@ -884,27 +1019,17 @@ test('destructive settings save is atomic when its storage write fails', async (
   assert.deepEqual(subject.local.values[keys.normalHistory].map((event) => event.id), ['one', 'two']);
 });
 
-test('optimistic settings retry preserves typical interleaved patches from split workers', async () => {
-  let settingsWrites = 0;
-  let releaseFirstVerify;
-  const firstVerifyGate = new Promise((resolve) => { releaseFirstVerify = resolve; });
-  let firstWriteReached;
-  const firstWrite = new Promise((resolve) => { firstWriteReached = resolve; });
+test('normal worker is the sole settings writer and incognito cannot overwrite it', async () => {
   const shared = memoryArea({ [keys.settings]: {
     maxRecords: 100, maxAgeDays: null, trashMaxAgeDays: 3, pageSize: 50, language: 'en', theme: 'system',
-  } }, { async afterSet(items) {
-    if (!Object.hasOwn(items, keys.settings)) return;
-    settingsWrites += 1;
-    if (settingsWrites === 1) { firstWriteReached(); await firstVerifyGate; }
   } });
   const normal = await loadBackground({ localArea: shared });
   const incognito = await loadBackground({ localArea: shared, incognito: true });
-  const first = normal.message({ type: 'save-settings', settings: { maxRecords: 25 } });
-  await firstWrite;
-  const second = await incognito.message({ type: 'save-settings', settings: { theme: 'dark' } });
-  releaseFirstVerify();
-  assert.equal((await first).ok, true);
-  assert.equal(second.ok, true);
+  const normalResult = await normal.message({ type: 'save-settings', settings: { maxRecords: 25 } });
+  const incognitoResult = await incognito.message({ type: 'save-settings', settings: { theme: 'dark' } });
+  assert.equal(normalResult.ok, true);
+  assert.equal(incognitoResult.ok, false);
+  assert.equal(incognitoResult.error.code, 'SETTINGS_READ_ONLY_INCOGNITO');
   assert.equal(shared.values[keys.settings].maxRecords, 25);
-  assert.equal(shared.values[keys.settings].theme, 'dark');
+  assert.equal(shared.values[keys.settings].theme, 'system');
 });

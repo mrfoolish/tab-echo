@@ -377,7 +377,7 @@ test('domain query returns the index, selected page, and complete selected ids i
   assert.equal(page.statistics.selectedRecords, 2);
 });
 
-test('incognito domain queries stay on the durable legacy partition', async () => {
+test('incognito domain queries stay on the durable local partition', async () => {
   const storage = memoryStorage({
     [STORAGE_KEYS.history.incognito]: [
       event('private', {

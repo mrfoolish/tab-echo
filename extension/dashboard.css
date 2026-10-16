@@ -99,13 +99,16 @@ h1 { margin: 0 0 5px; font-size: clamp(27px, 3vw, 34px); font-weight: 720; line-
 .event-card.is-group.is-expanded + .event-card { border-top-color: var(--line-strong); }
 .event-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 12px 14px; }
 .event-card.is-single .event-header { grid-template-columns: minmax(0, 1fr) auto; }
-.event-summary, .tab-copy { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
+.event-summary { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; white-space: nowrap; }
+.event-summary:not(.group-summary) { display: grid; grid-template-columns: minmax(10rem, 4fr) minmax(0, 5fr); }
+.tab-copy { display: grid; grid-template-columns: minmax(10rem, 3fr) minmax(0, 2fr); min-width: 0; align-items: baseline; gap: 12px; overflow: hidden; white-space: nowrap; }
 .event-summary strong, .tab-copy strong { min-width: 8rem; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.event-summary span, .tab-copy span { min-width: 0; max-width: 36%; flex: 0 1 36%; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.event-summary .event-details-inline { display: flex; min-width: 0; max-width: 62%; flex: 0 1 62%; align-items: baseline; gap: 8px; }
+.event-summary span { min-width: 0; max-width: 36%; flex: 0 1 36%; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.tab-copy strong, .tab-copy span { min-width: 0; max-width: none; width: 100%; flex: none; }
+.tab-copy span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.event-summary .event-details-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; max-width: none; width: 100%; flex: none; align-items: baseline; gap: 8px; }
 .event-summary .event-address { min-width: 0; max-width: none; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-summary .event-time { max-width: none; flex: 0 0 auto; overflow: visible; }
-#trashView .event-summary > span:last-child { max-width: 55%; flex-basis: 55%; }
 .group-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; }
 .group-summary .group-identity { display: flex; min-width: 0; max-width: none; flex: 1 1 auto; align-items: center; gap: 9px; color: var(--ink); font-size: 14px; }
 .group-summary .group-identity::before, .group-summary .group-badge::before { content: none; }
@@ -198,6 +201,8 @@ button:not(:disabled):active { transform: translateY(1px); }
   .event-card.is-single .event-header { grid-template-columns: minmax(0, 1fr); }
   .event-actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
   .event-card.is-single .event-actions { grid-column: 1; }
+  .event-summary:not(.group-summary) { grid-template-columns: minmax(7rem, 4fr) minmax(0, 5fr); }
+  .tab-copy { grid-template-columns: minmax(7rem, 2fr) minmax(0, 1fr); }
   .tab-row { padding-left: 14px; }
   .pager { flex-wrap: wrap; }
   .settings-form { padding: 6px 18px 20px; }

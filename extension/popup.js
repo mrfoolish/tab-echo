@@ -22,6 +22,7 @@
       moved: 'Moved {count} to Trash.', reopened: 'Reopened {count} tab(s).', partial: 'Reopened {count}; {failed} failed.',
       trashUnavailable: 'Trash count unavailable',
       groupMatch: '{matched} of {total} tabs match', storageWriteFailed: 'Could not save data to browser storage. Check available space and try again.',
+      indexedDbUnavailable: 'Regular closed-tab storage is unavailable. Reload the extension and try again.',
     },
     zh: {
       modeRegular: '常规窗口 · 已关闭标签页', modeIncognito: '无痕窗口 · 已关闭标签页',
@@ -37,11 +38,12 @@
       moved: '已将 {count} 条移至回收站。', reopened: '已重新打开 {count} 个标签页。', partial: '已重新打开 {count} 个；{failed} 个失败。',
       trashUnavailable: '回收站数量不可用',
       groupMatch: '命中 {matched} / {total} 个标签页', storageWriteFailed: '无法将数据保存到浏览器存储空间，请检查可用空间后重试。',
+      indexedDbUnavailable: '常规关闭记录存储暂不可用，请重新加载扩展后重试。',
     },
   };
 
   const state = { query: '', loadedQuery: null, loading: true, results: [], totalRecords: 0, totalTabs: 0, totalResults: 0, totalResultTabs: 0, trashCount: 0,
-    trashAvailable: true, mode: 'normal', settings: null, requestToken: 0, pending: new Set(), debounceTimer: null, statusTimer: null, removeMenuTimer: null, pendingRemoval: null };
+    trashAvailable: true, mode: 'normal', settings: null, requestToken: 0, pending: new Set(), groupExpansion: new Map(), debounceTimer: null, statusTimer: null, removeMenuTimer: null, pendingRemoval: null };
   let elements;
 
   function t(key, values = {}) {
@@ -52,7 +54,9 @@
 
   function errorMessage(error) {
     if (error && ['ACTION_STALE', 'ACTION_TOKEN_INVALID', 'ACTION_TOKEN_EXPIRED'].includes(error.code)) return t('actionStale');
-    return t(error && error.code === 'STORAGE_WRITE_FAILED' ? 'storageWriteFailed' : 'requestFailed');
+    if (error && error.code === 'STORAGE_WRITE_FAILED') return t('storageWriteFailed');
+    if (error && error.code === 'INDEXEDDB_UNAVAILABLE') return t('indexedDbUnavailable');
+    return t('requestFailed');
   }
 
   function popupSize(settings = state.settings) {
@@ -104,6 +108,7 @@
     elements.searchInput.addEventListener('input', () => {
       clearRemovalConfirmation();
       state.query = elements.searchInput.value;
+      state.groupExpansion.clear();
       state.requestToken += 1;
       state.loading = true;
       state.loadedQuery = null;
@@ -139,7 +144,7 @@
       if (event.key === '/' && !isFormControl(event.target)) { event.preventDefault(); elements.searchInput.focus(); elements.searchInput.select(); }
       if (event.key === 'Escape' && state.pendingRemoval) { clearRemovalConfirmation(true); return; }
       if (event.key === 'Escape' && !elements.bulkRemoveMenu.hidden) { closeRemoveMenu(); elements.bulkRemoveButton.focus(); return; }
-      if (event.key === 'Escape' && elements.searchInput.value) { elements.searchInput.value = ''; state.query = ''; refresh(''); }
+      if (event.key === 'Escape' && elements.searchInput.value) { elements.searchInput.value = ''; state.query = ''; state.groupExpansion.clear(); refresh(''); }
     });
   }
 
@@ -221,14 +226,29 @@
   function renderEvent(result) {
     const closeEvent = result.event || {};
     const tabs = state.query.trim() ? (result.matchedTabs || []) : (closeEvent.tabs || []);
+    const isGroup = closeEvent.kind === 'group';
+    const groupKey = String(closeEvent.id);
+    const expanded = isGroup
+      ? (state.groupExpansion.has(groupKey) ? state.groupExpansion.get(groupKey) : Boolean(state.query.trim()))
+      : false;
     const row = root.document.createElement('article'); row.className = 'event-row'; row.setAttribute('role', 'listitem');
     const copy = root.document.createElement('div'); copy.className = 'event-copy';
     const heading = root.document.createElement('div'); heading.className = 'event-heading';
-    const title = root.document.createElement('strong'); title.className = 'event-title';
-    title.textContent = closeEvent.kind === 'group' ? t('group', { count: result.totalTabCount || (closeEvent.tabs || []).length }) : tabTitle(tabs[0] || (closeEvent.tabs || [])[0]);
+    const title = isGroup
+      ? makeButton(t('group', { count: result.totalTabCount || (closeEvent.tabs || []).length }), 'toggle-group', { eventId: closeEvent.id }, 'event-title group-toggle')
+      : root.document.createElement('strong');
+    title.className = isGroup ? 'event-title group-toggle' : 'event-title';
+    if (isGroup) {
+      title.setAttribute('aria-expanded', String(expanded));
+      title.setAttribute('aria-controls', `popup-group-${encodeURIComponent(groupKey)}`);
+    } else {
+      title.textContent = tabTitle(tabs[0] || (closeEvent.tabs || [])[0]);
+    }
     heading.append(title, renderEventTime(closeEvent.closedAt));
     const details = root.document.createElement('div'); details.className = 'event-details';
-    if (closeEvent.kind === 'group') {
+    if (isGroup) {
+      details.id = `popup-group-${encodeURIComponent(groupKey)}`;
+      details.hidden = !expanded;
       if (state.query.trim()) { const match = root.document.createElement('span'); match.textContent = t('groupMatch', { matched: result.matchedTabCount, total: result.totalTabCount }); details.appendChild(match); }
       for (const tab of tabs) details.appendChild(renderTab(closeEvent.id, tab));
     } else {
@@ -239,7 +259,7 @@
     copy.append(heading, details);
     const actions = root.document.createElement('div'); actions.className = 'event-actions';
     const primaryTab = (closeEvent.tabs || [])[0] || {};
-    actions.append(closeEvent.kind === 'group'
+    actions.append(isGroup
       ? makeButton(t('reopenAll'), 'reopen-event', { eventId: closeEvent.id }, 'reopen-button')
       : makeButton(t('reopen'), 'reopen-tab', { eventId: closeEvent.id, tabId: primaryTab.id }, 'reopen-button'));
     actions.append(makeButton(t('moveOne'), 'move-event', { eventId: closeEvent.id }, 'icon-action', '×'));
@@ -252,6 +272,7 @@
     const time = root.document.createElement('time'); time.className = 'event-time';
     time.textContent = root.TabEchoTimeFormat.formatRelativeTime(closedAt, language);
     time.setAttribute('datetime', new Date(Number(closedAt)).toISOString()); time.tabIndex = 0; time.dataset.fullTime = fullTime;
+    time.dataset.tooltip = fullTime;
     time.setAttribute('aria-label', fullTime);
     return time;
   }
@@ -275,11 +296,11 @@
   }
 
   function showActionTooltip(event) {
-    const button = event.target.closest && event.target.closest('button[data-tooltip]');
-    if (!button || button.disabled) return;
+    const target = event.target.closest && event.target.closest('[data-tooltip]');
+    if (!target || target.disabled) return;
     const tooltip = elements.actionTooltip;
-    const rect = button.getBoundingClientRect();
-    tooltip.textContent = button.dataset.tooltip;
+    const rect = target.getBoundingClientRect();
+    tooltip.textContent = target.dataset.tooltip;
     tooltip.hidden = false;
     const tooltipRect = tooltip.getBoundingClientRect();
     const margin = 8;
@@ -292,13 +313,13 @@
     const maxTop = Math.max(margin, root.innerHeight - tooltipRect.height - margin);
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${Math.min(maxTop, Math.max(margin, above >= margin ? above : below))}px`;
-    button.setAttribute('aria-describedby', 'actionTooltip');
+    target.setAttribute('aria-describedby', 'actionTooltip');
   }
 
   function hideActionTooltip(event) {
-    const button = event && event.target && event.target.closest && event.target.closest('button[data-tooltip]');
-    if (button && event.relatedTarget && button.contains && button.contains(event.relatedTarget)) return;
-    if (button) button.removeAttribute('aria-describedby');
+    const target = event && event.target && event.target.closest && event.target.closest('[data-tooltip]');
+    if (target && event.relatedTarget && target.contains && target.contains(event.relatedTarget)) return;
+    if (target) target.removeAttribute('aria-describedby');
     elements.actionTooltip.hidden = true;
   }
 
@@ -313,6 +334,18 @@
     const button = event.target.closest && event.target.closest('button[data-action]');
     if (!button || !resultsCurrent() || button.disabled) return;
     const { action, eventId, tabId } = button.dataset;
+    if (action === 'toggle-group') {
+      const current = typeof button.getAttribute === 'function'
+        ? button.getAttribute('aria-expanded') === 'true' : button['aria-expanded'] === 'true';
+      state.groupExpansion.set(String(eventId), !current);
+      render();
+      if (typeof elements.historyList.querySelectorAll === 'function') {
+        const replacement = Array.from(elements.historyList.querySelectorAll('[data-action="toggle-group"]'))
+          .find((candidate) => candidate.dataset.eventId === String(eventId));
+        if (replacement) replacement.focus();
+      }
+      return;
+    }
     if (action === 'reopen-tab') await mutate({ type: 'reopen-tab', eventId, tabId }, 'reopen-tab:' + eventId + ':' + tabId, 'reopened');
     if (action === 'reopen-event') await mutate({ type: 'reopen-event', eventId }, 'reopen-event:' + eventId, 'reopened');
     if (action === 'move-event') await mutate({ type: 'move-to-trash', eventIds: [eventId] }, 'move:' + eventId, 'moved');

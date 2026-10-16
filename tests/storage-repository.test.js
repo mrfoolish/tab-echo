@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
   STORAGE_KEYS,
+  createUnavailableStorageRepository,
   createStorageRepository,
 } = require('../extension/lib/storage-repository.js');
 
@@ -85,6 +86,30 @@ test('exports all partitioned v2 storage keys', () => {
       incognito: 'tabEcho:revision:incognito:v2',
     },
   });
+});
+
+test('unavailable repository fails every storage entry point with one stable error', async () => {
+  const repository = createUnavailableStorageRepository({
+    code: 'INDEXEDDB_UNAVAILABLE',
+    message: 'Regular storage unavailable.',
+  });
+  const calls = [
+    () => repository.getSettings(),
+    () => repository.readContext('normal'),
+    () => repository.readHistory('normal'),
+    () => repository.readTrash('normal'),
+    () => repository.queryCollection('history', 'normal', ''),
+    () => repository.queryHistoryByDomain('normal', ''),
+    () => repository.saveSettings({}),
+    () => repository.updateContext('normal', () => ({})),
+    () => repository.updateSettingsAndContext('normal', () => ({})),
+  ];
+
+  for (const call of calls) {
+    await assert.rejects(call, (error) => (
+      error.code === 'INDEXEDDB_UNAVAILABLE' && error.message === 'Regular storage unavailable.'
+    ));
+  }
 });
 
 test('context and settings revisions start at zero and advance with durable writes', async () => {

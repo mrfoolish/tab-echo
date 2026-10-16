@@ -26,7 +26,11 @@ const {
   searchEvents,
   validateSettingsInput,
 } = self.TabEchoHistoryStore;
-const { createStorageRepository } = self.TabEchoStorageRepository;
+const {
+  STORAGE_KEYS,
+  createStorageRepository,
+  createUnavailableStorageRepository,
+} = self.TabEchoStorageRepository;
 const { createDomainQuery } = self.TabEchoDomainGroups;
 const { createCloseTracker, createTrackerPersistence, isHttpUrl } = self.TabEchoCloseTracker;
 
@@ -41,19 +45,24 @@ const localRepository = createStorageRepository(chrome.storage.local);
 const indexedDbAvailable = typeof self.indexedDB === 'object'
   && self.TabEchoIndexedDbRepository
   && self.TabEchoIndexedDbStorageRepository;
-const indexedDbRecordStore = indexedDbAvailable
+const indexedDbRecordStore = activeMode === 'normal' && indexedDbAvailable
   ? self.TabEchoIndexedDbRepository.createIndexedDbRecordStore({
     indexedDB: self.indexedDB,
     IDBKeyRange: self.IDBKeyRange,
   })
   : null;
-const repository = indexedDbRecordStore
-  ? self.TabEchoIndexedDbStorageRepository.createIndexedDbStorageRepository(
-    chrome.storage.local,
-    indexedDbRecordStore,
-    { legacyRepository: localRepository, indexedModes: ['normal'] },
-  )
-  : localRepository;
+const repository = activeMode === 'incognito'
+  ? localRepository
+  : indexedDbRecordStore
+    ? self.TabEchoIndexedDbStorageRepository.createIndexedDbStorageRepository(
+      chrome.storage.local,
+      indexedDbRecordStore,
+      { localRepository, indexedModes: ['normal'] },
+    )
+    : createUnavailableStorageRepository({
+      code: 'INDEXEDDB_UNAVAILABLE',
+      message: 'Regular closed-tab storage is unavailable. Reload the extension and try again.',
+    });
 const trackerPersistence = createTrackerPersistence(
   chrome.storage.session,
   chrome.storage.local,
@@ -281,6 +290,14 @@ async function commitPendingEvent(entry) {
 async function handleMessage(message) {
   await ensureReady();
   const action = message && (message.type || message.action);
+  if (activeMode === 'incognito'
+    && ['save-settings', 'preview-settings-impact'].includes(action)) {
+    throw protocolError('SETTINGS_READ_ONLY_INCOGNITO',
+      'Shared settings can only be changed in a regular window.');
+  }
+  if (['get-state', 'get-history', 'get-trash', 'get-history-by-domain'].includes(action)) {
+    await trackerQueue;
+  }
   if (action === 'get-current-mode') {
     return { mode: activeMode };
   }
@@ -533,8 +550,20 @@ async function getStorageHealth() {
   let localBytesUsed = null;
   if (storageArea && typeof storageArea.getBytesInUse === 'function') {
     try {
-      const measured = Number(await storageArea.getBytesInUse(null));
-      if (Number.isFinite(measured) && measured >= 0) localBytesUsed = Math.round(measured);
+      const recordKeys = [
+        STORAGE_KEYS.history.incognito,
+        STORAGE_KEYS.trash.incognito,
+      ];
+      const measuredPayloads = await Promise.all(recordKeys.map(async (key) => {
+        const measured = Number(await storageArea.getBytesInUse(key));
+        if (!Number.isFinite(measured) || measured < 0) return null;
+        // Chrome includes the key and serialized value in its quota accounting.
+        // Remove the fixed `key + []` baseline so empty record collections read as 0 B.
+        return Math.max(0, Math.round(measured) - key.length - JSON.stringify([]).length);
+      }));
+      if (measuredPayloads.every((bytes) => bytes !== null)) {
+        localBytesUsed = measuredPayloads.reduce((total, bytes) => total + bytes, 0);
+      }
     } catch (_) { /* Fall through to the origin estimate when available. */ }
   }
   let originEstimate = null;
@@ -723,6 +752,10 @@ async function commitDestructiveAction(message) {
   }
   const prepared = await consumeActionToken(message.token);
   if (prepared.operation === 'save-settings') {
+    if (activeMode === 'incognito') {
+      throw protocolError('SETTINGS_READ_ONLY_INCOGNITO',
+        'Shared settings can only be changed in a regular window.');
+    }
     return repository.updateSettingsAndContext(activeMode, (context) => {
       if (context.revision !== prepared.revision || context.settingsRevision !== prepared.settingsRevision) {
         throw protocolError('ACTION_STALE', 'Records or settings changed after confirmation. Nothing was saved or removed.');

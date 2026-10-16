@@ -16,7 +16,7 @@ Tab Echo is a local-first Chrome extension for finding and reopening real closed
 - Provides a full-page dashboard for closed tabs, Trash, pagination, search, and settings. Closed tabs can be viewed by close time or domain; domain-view bulk actions affect only the selected domain.
 - Shows a configurable number of results in the popup (10 by default, 1–200) for quick search and actions.
 - Supports light, dark, and system themes, plus English and Chinese UI.
-- Shows separate storage pressure for regular IndexedDB records and local incognito/settings data, without combining their unrelated quotas.
+- Shows separate storage pressure for regular IndexedDB records and local incognito records, without combining their unrelated quotas. Shared settings, close-tracker snapshots, and fixed empty-collection metadata are excluded from the incognito record figure.
 - Applies mixed cleanup: retention age first, then the oldest entries above the count limit; expired Trash is removed by age only.
 
 ## Retention Defaults
@@ -27,7 +27,7 @@ Tab Echo is a local-first Chrome extension for finding and reopening real closed
 
 Each retention setting can be left blank. A blank entry limit means unlimited; a blank history or Trash retention period means kept indefinitely. Browser storage limits still apply, and the extension intentionally does not request `unlimitedStorage`. Values must otherwise be positive integers. Before saving, Tab Echo previews the permanent-deletion impact; settings with no deletion impact save immediately, while destructive changes require inline confirmation.
 
-Excluded domains are entered one per line. `example.com` matches both that hostname and its subdomains. New exclusions always apply to future closed tabs. When saving a newly added rule that matches existing data, the same inline preview offers **Save rules only** or **Save and remove matches**. Removing matches applies only to the newly added rules in the current regular or incognito context, preserves nonmatching tabs in a Group, and does not move removed data to Trash.
+Excluded domains are entered one per line. `example.com` matches both that hostname and its subdomains. New exclusions always apply to future closed tabs. Shared settings are edited only from a regular window, which prevents regular and incognito extension workers from overwriting each other. When saving a newly added rule that matches existing regular data, the same inline preview offers **Save rules only** or **Save and remove matches**. Removing matches applies only to the newly added rules, preserves nonmatching tabs in a Group, and does not move removed data to Trash.
 
 ## Install and Use
 
@@ -42,7 +42,7 @@ Moving entries to Trash, moving them back to Closed tabs, and immediately removi
 
 ### Incognito windows
 
-On `chrome://extensions`, open Tab Echo's details and enable **Allow in Incognito**. The manifest uses `"incognito": "split"`, so Chrome runs a separate extension context for incognito windows. Closed-tab history and Trash remain isolated; preferences are shared. Large regular-context lists use IndexedDB; incognito records use context-isolated durable local storage so Chrome cannot discard them together with the incognito IndexedDB partition when the final incognito window closes.
+On `chrome://extensions`, open Tab Echo's details and enable **Allow in Incognito**. The manifest uses `"incognito": "split"`, so Chrome runs a separate extension context for incognito windows. Closed-tab history and Trash remain isolated; preferences are shared and shown read-only in incognito pages, and can be changed from a regular window. Large regular-context lists use IndexedDB; incognito records use context-isolated durable local storage so Chrome cannot discard them together with the incognito IndexedDB partition when the final incognito window closes.
 
 ## Privacy and Permissions
 

@@ -1,6 +1,6 @@
 {
   "name": "tab-echo",
-  "version": "0.1.3",
+  "version": "1.0.0",
   "private": true,
   "description": "Local-first closed-tab recovery Chrome extension",
   "scripts": {

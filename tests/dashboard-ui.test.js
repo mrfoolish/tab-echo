@@ -71,7 +71,7 @@ test('storage formatting is compact and localized', () => {
   assert.equal(helpers.formatStoragePercent(0.9, 'zh'), '90%');
 });
 
-test('storage pressure panel separates regular records from local incognito and settings data', () => {
+test('storage pressure panel separates regular records from incognito closed records', () => {
   const headingIndex = html.indexOf('data-i18n="retentionSection"');
   const panelIndex = html.indexOf('id="storageHealthPanel"');
   const retentionInputsIndex = html.indexOf('class="settings-section settings-retention"');
@@ -392,7 +392,7 @@ test('settings are grouped without repeating the save-impact scope notice by def
   assert.doesNotMatch(html, /id="settingsScope"/);
   assert.doesNotMatch(css, /\.settings-scope\s*\{/);
   assert.doesNotMatch(js, /elements\.settingsScope\.textContent/);
-  assert.match(js, /本次预览只统计当前\{mode\}的数据/);
+  assert.match(js, /本次预览只统计常规窗口数据/);
   assert.match(js, /messages\.push\(t\('settingsScope'/);
   assert.match(css, /\.settings-section\s*\{/);
 });
@@ -444,8 +444,10 @@ test('dashboard is responsive and honors theme, focus, and reduced-motion prefer
 });
 
 test('dashboard list summaries and tab details stay on one compact line', () => {
-  assert.match(css, /\.event-summary, \.tab-copy \{[^}]*display:\s*flex[^}]*white-space:\s*nowrap/s);
-  assert.match(css, /\.event-summary span, \.tab-copy span \{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s);
+  assert.match(css, /\.event-summary \{[^}]*white-space:\s*nowrap/s);
+  assert.match(css, /\.tab-copy \{[^}]*display:\s*grid[^}]*white-space:\s*nowrap/s);
+  assert.match(css, /\.event-summary span \{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s);
+  assert.match(css, /\.tab-copy span \{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(css, /\.event-summary span::before, \.tab-copy span::before/);
   assert.match(js, /if \(isGroup\) \{/);
   assert.match(js, /setAttribute\('aria-controls', `history-tabs-/);
@@ -453,7 +455,7 @@ test('dashboard list summaries and tab details stay on one compact line', () => 
   assert.match(js, /card.className = `event-card \${isGroup \? `is-group \${expanded \? 'is-expanded' : 'is-collapsed'}` : 'is-single'}`/);
   assert.match(js, /else \{ toggle = null; \}/);
   assert.match(css, /\.event-card\.is-single \.event-header \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto/s);
-  assert.match(css, /\.event-summary span, \.tab-copy span \{[^}]*max-width:\s*36%[^}]*flex:\s*0 1 36%/s);
+  assert.match(css, /\.event-summary span \{[^}]*max-width:\s*36%[^}]*flex:\s*0 1 36%/s);
 });
 
 test('dashboard makes grouped close events visually distinct', () => {
@@ -847,6 +849,19 @@ test('dashboard shows group matched/total counts and localizes storage failures'
   assert.match(js, /function errorMessage/);
 });
 
+test('dashboard localizes unavailable regular IndexedDB storage', () => {
+  assert.match(js, /indexedDbUnavailable: 'Regular closed-tab storage is unavailable\. Reload the extension and try again\.'/);
+  assert.match(js, /indexedDbUnavailable: '常规关闭记录存储暂不可用，请重新加载扩展后重试。'/);
+  assert.match(js, /INDEXEDDB_UNAVAILABLE/);
+});
+
+test('incognito settings are presented as shared read-only values', () => {
+  assert.match(js, /settingsReadOnlyIncognito: 'Shared settings can only be changed in a regular window\.'/);
+  assert.match(js, /settingsReadOnlyIncognito: '共享设置只能在常规窗口中修改。'/);
+  assert.match(js, /state\.mode === 'incognito'/);
+  assert.match(js, /elements\.settingsForm\.querySelectorAll\('input, select, textarea, button'\)/);
+});
+
 test('runtime localizes navigation, history, search, and pagination aria labels', () => {
   for (const key of ['dashboardLabel', 'historyListLabel', 'searchAriaLabel', 'paginationLabel']) {
     assert.equal((js.match(new RegExp(`${key}:`, 'g')) || []).length, 2, `${key} must be bilingual`);
@@ -871,4 +886,8 @@ test('dashboard keeps long addresses separate from always-visible relative times
   assert.match(js, /trashTiming/);
   assert.match(css, /\.event-summary \.event-address[^}]*text-overflow:\s*ellipsis/s);
   assert.match(css, /\.event-summary \.event-time[^}]*flex:\s*0 0 auto/s);
+  assert.match(css, /\.event-summary:not\(\.group-summary\)[^{]*\{[^}]*grid-template-columns:\s*minmax\(10rem,\s*4fr\)\s+minmax\(0,\s*5fr\)/s);
+  assert.match(css, /\.event-summary \.event-details-inline[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/s);
+  assert.match(css, /\.tab-copy[^{]*\{[^}]*grid-template-columns:\s*minmax\(10rem,\s*3fr\)\s+minmax\(0,\s*2fr\)/s);
+  assert.doesNotMatch(css, /#trashView \.event-summary > span:last-child/);
 });

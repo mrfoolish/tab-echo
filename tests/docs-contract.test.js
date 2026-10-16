@@ -95,9 +95,10 @@ test('production has no unreleased migration compatibility', () => {
 test('product docs describe separate storage pools without a combined quota', () => {
   const en = read('README.md');
   const zh = read('README.zh.md');
-  assert.match(en, /regular IndexedDB records and local incognito\/settings data/i);
+  assert.match(en, /regular IndexedDB records and local incognito records/i);
   assert.match(en, /without combining their unrelated quotas/i);
-  assert.match(zh, /常规 IndexedDB 记录与无痕记录\/设置数据/);
+  assert.match(zh, /常规 IndexedDB 记录与无痕记录/);
+  assert.doesNotMatch(zh, /无痕记录\/设置数据/);
   assert.match(zh, /不把两套无关容量相加/);
 });
 
@@ -122,7 +123,7 @@ test('manual acceptance distinguishes automated preflight from remaining manual 
   const manual = read('docs/testing/2026-09-18-manual-acceptance.md');
   assert.match(manual, /状态：\*\*部分执行（自动化预检完成，人工交互待执行）\*\*/);
   assert.match(manual, /Chrome 版本：(待填写|\d+\.\d+\.\d+\.\d+)/);
-  assert.match(manual, /扩展版本：(待填写|\d+\.\d+\.\d+)/);
+  assert.match(manual, /当前待验收版本：(待填写|\d+\.\d+\.\d+)/);
   assert.match(manual, /执行日期：(待填写|\d{4}-\d{2}-\d{2})/);
   assert.match(manual, /执行人：\S[^\n]*/);
   assert.match(manual, /(?:阻塞|执行)记录/);

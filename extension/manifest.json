@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Echo",
   "description": "A lightweight enhanced reopen-closed-tabs extension with searchable grouped close history.",
-  "version": "0.1.3",
+  "version": "1.0.0",
   "action": {
     "default_title": "Tab Echo",
     "default_popup": "popup.html",
