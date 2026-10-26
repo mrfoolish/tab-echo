@@ -11,7 +11,7 @@
     maxRecords: 10000,
     maxAgeDays: null,
     trashMaxAgeDays: 3,
-    popupSize: 10,
+    popupSize: 100,
     pageSize: 50,
     language: 'en',
     theme: 'system',

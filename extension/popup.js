@@ -5,7 +5,7 @@
 }(typeof globalThis !== 'undefined' ? globalThis : this, (root) => {
   'use strict';
 
-  const DEFAULT_POPUP_SIZE = 10;
+  const DEFAULT_POPUP_SIZE = 100;
   const MAX_POPUP_SIZE = 200;
   const I18N = {
     en: {

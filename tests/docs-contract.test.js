@@ -46,6 +46,8 @@ test('every optional setting permanently explains blank semantics and browser li
 test('English and Chinese READMEs document the shipped product contract', () => {
   const en = read('README.md');
   const zh = read('README.zh.md');
+  assert.match(en, /100 by default, 1–200/i);
+  assert.match(zh, /默认展示 100 条结果，可在设置中配置为 1–200 条/);
   for (const required of [
     'README.zh.md', '10', '10,000', '3 days', 'unlimited', 'Trash',
     'storage-repository.js', 'indexeddb-repository.js', 'close-tracker.js', 'dashboard.html',

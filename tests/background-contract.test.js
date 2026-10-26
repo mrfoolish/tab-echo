@@ -603,7 +603,7 @@ test('save-settings applies patch semantics and preserves omitted retention sett
   const saved = await subject.message({ action: 'save-settings', settings: { pageSize: 25, language: 'zh', theme: 'dark' } });
   assert.equal(saved.ok, true, JSON.stringify(saved));
   assert.deepEqual(structuredClone(subject.local.values[keys.settings]), {
-    maxRecords: 77, maxAgeDays: 9, trashMaxAgeDays: 3, popupSize: 10, pageSize: 25, language: 'zh', theme: 'dark', excludedDomains: [], settingsVersion: 2,
+    maxRecords: 77, maxAgeDays: 9, trashMaxAgeDays: 3, popupSize: 100, pageSize: 25, language: 'zh', theme: 'dark', excludedDomains: [], settingsVersion: 2,
   });
 });
 
@@ -698,7 +698,7 @@ test('get-settings returns settings and the trusted active browsing mode without
   const result = await subject.message({ type: 'get-settings', mode: 'normal' });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.mode, 'incognito');
-  assert.deepEqual(structuredClone(result.settings), { ...current, popupSize: 10, excludedDomains: [], settingsVersion: 2 });
+  assert.deepEqual(structuredClone(result.settings), { ...current, popupSize: 100, excludedDomains: [], settingsVersion: 2 });
   assert.equal(Object.hasOwn(result, 'events'), false);
   assert.equal(Object.hasOwn(result, 'results'), false);
   assert.deepEqual(subject.local.getKeys.slice(getBaseline), [keys.settings]);
