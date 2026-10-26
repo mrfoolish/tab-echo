@@ -145,7 +145,10 @@
     }
 
     function snapshotTab(tab) {
-      if (!tab || !Number.isInteger(tab.id) || !isHttpUrl(tab.url)) {
+      const url = isHttpUrl(tab && tab.url)
+        ? String(tab.url)
+        : isHttpUrl(tab && tab.pendingUrl) ? String(tab.pendingUrl) : null;
+      if (!tab || !Number.isInteger(tab.id) || !url) {
         return null;
       }
       const tabMode = tab.incognito ? 'incognito' : 'normal';
@@ -154,8 +157,8 @@
       }
       return {
         id: String(tab.id),
-        title: String(tab.title || tab.url),
-        url: String(tab.url),
+        title: String(tab.title || url),
+        url,
         position: Number.isInteger(tab.index) ? tab.index : 0,
         sourceWindowId: tab.windowId ?? null,
         mode,
@@ -306,6 +309,34 @@
       snapshot.sourceWindowId = attachInfo.newWindowId;
       insertIntoWindow(tabId, attachInfo.newWindowId, attachInfo.newPosition);
       delete state.consumedWindowIds[String(attachInfo.newWindowId)];
+      return { accepted: true, state: getState() };
+    }
+
+    function replaceTabId(addedTabId, removedTabId) {
+      if (!Number.isInteger(addedTabId) || addedTabId < 0
+        || !Number.isInteger(removedTabId) || removedTabId < 0
+        || addedTabId === removedTabId) {
+        return { accepted: false, state: getState() };
+      }
+      const addedId = String(addedTabId);
+      const removedId = String(removedTabId);
+      const previous = state.tabSnapshotsById[removedId];
+      if (!previous) {
+        return { accepted: false, state: getState() };
+      }
+      const existingReplacement = state.tabSnapshotsById[addedId];
+      if (existingReplacement) {
+        removeFromWindow(addedId, existingReplacement.sourceWindowId);
+      }
+      delete state.tabSnapshotsById[removedId];
+      state.tabSnapshotsById[addedId] = { ...previous, id: addedId };
+      const windowSnapshot = state.windowSnapshotsById[String(previous.sourceWindowId)];
+      if (windowSnapshot) {
+        windowSnapshot.tabIds = windowSnapshot.tabIds.map((id) => (
+          String(id) === removedId ? addedId : String(id)
+        ));
+        sortWindow(windowSnapshot);
+      }
       return { accepted: true, state: getState() };
     }
 
@@ -495,6 +526,7 @@
       hydrate,
       moveTab,
       pendingEvents,
+      replaceTabId,
       removeTab,
       removeWindow,
       reconcileRecoveredSession,

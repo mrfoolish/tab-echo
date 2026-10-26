@@ -134,6 +134,14 @@ chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
   }).catch(reportError);
 });
 
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  enqueueTrackerMutation(async () => {
+    tracker.replaceTabId(addedTabId, removedTabId);
+    await persistTrackerState();
+    await commitAllPendingEvents();
+  }).catch(reportError);
+});
+
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   enqueueTrackerMutation(async () => {
     const result = tracker.removeTab(tabId, removeInfo);

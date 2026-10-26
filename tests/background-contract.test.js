@@ -74,7 +74,7 @@ async function loadBackground({ incognito = false, indexedDbAvailable = true, lo
   const events = {
     installed: chromeEvent(), startup: chromeEvent(), alarm: chromeEvent(), message: chromeEvent(),
     created: chromeEvent(), updated: chromeEvent(), moved: chromeEvent(), detached: chromeEvent(),
-    attached: chromeEvent(), removed: chromeEvent(), windowRemoved: chromeEvent(),
+    attached: chromeEvent(), replaced: chromeEvent(), removed: chromeEvent(), windowRemoved: chromeEvent(),
   };
   const visibleTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
@@ -94,7 +94,8 @@ async function loadBackground({ incognito = false, indexedDbAvailable = true, lo
     },
     tabs: {
       onCreated: events.created, onUpdated: events.updated, onMoved: events.moved,
-      onDetached: events.detached, onAttached: events.attached, onRemoved: events.removed,
+      onDetached: events.detached, onAttached: events.attached, onReplaced: events.replaced,
+      onRemoved: events.removed,
       async query(filter = {}) {
         if (queryGate) await queryGate;
         return visibleTabs.filter((tab) => !filter.url || tab.url === filter.url).map((tab) => ({ ...tab }));
@@ -277,6 +278,61 @@ test('ordinary close is immediately visible without waiting for a batch timer', 
   assert.equal(history.ok, true);
   assert.equal(history.statistics.totalRecords, 1);
   assert.equal(history.results[0].event.tabs[0].url, trackedTab.url);
+});
+
+test('a pending-url tab closed before commit is immediately visible', async () => {
+  const subject = await loadBackground();
+  const tab = {
+    id: 801, windowId: 80, index: 0, incognito: false,
+    title: '', url: '', pendingUrl: 'https://pending.example/',
+  };
+
+  subject.events.created.listeners[0](tab);
+  subject.events.removed.listeners[0](tab.id, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, tab.pendingUrl);
+});
+
+test('a loading pending URL is captured before an ordinary close', async () => {
+  const subject = await loadBackground();
+  const tab = {
+    id: 802, windowId: 80, index: 0, incognito: false,
+    title: '', url: '', pendingUrl: 'https://loading.example/',
+  };
+
+  subject.events.updated.listeners[0](tab.id, { status: 'loading' }, tab);
+  subject.events.removed.listeners[0](tab.id, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, tab.pendingUrl);
+});
+
+test('a replaced tab id remains recordable through its new id', async () => {
+  const tab = {
+    id: 1, windowId: 10, index: 0, incognito: false,
+    title: 'Prerender', url: 'https://prerender.example/',
+  };
+  const subject = await loadBackground({ tabs: [tab] });
+
+  subject.events.replaced.listeners[0](2, 1);
+  subject.events.removed.listeners[0](2, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].id, '2');
+  assert.equal(history.results[0].event.tabs[0].url, tab.url);
 });
 
 test('history reads wait for an ordinary close already queued for persistence', async () => {
