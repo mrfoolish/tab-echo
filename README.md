@@ -14,7 +14,7 @@ Tab Echo is a local-first Chrome extension for finding and reopening real closed
 - Excludes selected domains (including their subdomains) from future closed-tab capture. When new rules match existing data, the Save flow previews the impact and lets the user either keep those records or remove the matches immediately.
 - Moves individual entries, current search results, or all entries to Trash in the same browsing context. Trash entries can be moved back without opening their pages, or removed immediately with no recovery.
 - Provides a full-page dashboard for closed tabs, Trash, pagination, search, and settings. Closed tabs can be viewed by close time or domain; domain-view bulk actions affect only the selected domain.
-- Shows a configurable number of results in the popup (10 by default, 1–200) for quick search and actions.
+- Shows a configurable number of results in the popup (100 by default, 1–200) for quick search and actions.
 - Supports light, dark, and system themes, plus English and Chinese UI.
 - Shows separate storage pressure for regular IndexedDB records and local incognito records, without combining their unrelated quotas. Shared settings, close-tracker snapshots, and fixed empty-collection metadata are excluded from the incognito record figure.
 - Applies mixed cleanup: retention age first, then the oldest entries above the count limit; expired Trash is removed by age only.

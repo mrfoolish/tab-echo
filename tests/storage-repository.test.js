@@ -118,7 +118,7 @@ test('context and settings revisions start at zero and advance with durable writ
 
   assert.deepEqual(await repository.readContext('normal'), {
     settings: {
-      maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 10,
+      maxRecords: 10000, maxAgeDays: null, trashMaxAgeDays: 3, popupSize: 100,
       pageSize: 50, language: 'en', theme: 'system', excludedDomains: [], settingsVersion: 2,
     },
     history: [], trash: [], revision: 0, settingsRevision: 0,
@@ -239,7 +239,7 @@ test('saveSettings validates fields, preserves legal nulls, and does not silentl
     pageSize: 25, language: 'zh', theme: 'dark',
   };
 
-  assert.deepEqual(await repository.saveSettings(valid), { ...valid, popupSize: 10, excludedDomains: [], settingsVersion: 2 });
+  assert.deepEqual(await repository.saveSettings(valid), { ...valid, popupSize: 100, excludedDomains: [], settingsVersion: 2 });
   assert.equal(storage.data[STORAGE_KEYS.settings].maxRecords, null);
   await assert.rejects(
     repository.saveSettings({ ...valid, pageSize: 12, maxRecords: 0 }),

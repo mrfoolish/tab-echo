@@ -279,11 +279,12 @@ test('popup uses the query protocol, caps event results, and exposes counted das
   assert.match(js, /type:\s*'open-dashboard',\s*view:\s*'settings'/);
 });
 
-test('popup display limit defaults to 10 and supports up to 200 entries', () => {
-  assert.equal(helpers.popupSize(), 10);
+test('popup display limit defaults to 100, preserves saved values, and supports up to 200 entries', () => {
+  assert.equal(helpers.popupSize(), 100);
+  assert.equal(helpers.popupSize({ popupSize: 10 }), 10);
   assert.equal(helpers.popupSize({ popupSize: 1 }), 1);
   assert.equal(helpers.popupSize({ popupSize: 200 }), 200);
-  assert.equal(helpers.popupSize({ popupSize: 201 }), 10);
+  assert.equal(helpers.popupSize({ popupSize: 201 }), 100);
 });
 
 test('popup operations use explicit visible ids and distinguish tab and event reopen', () => {
@@ -311,7 +312,7 @@ test('VM renders ten of twenty-one events, total and trash counts, and explicit 
   const results = Array.from({ length: 21 }, (_, index) => result('event-' + index));
   let moveResolve; const moveGate = new Promise((resolve) => { moveResolve = resolve; });
   const app = createVm(async (message) => {
-    if (message.type === 'get-history') return { ok: true, mode: 'normal', settings: { language: 'en', theme: 'system' }, results, resultEventCount: 21 };
+    if (message.type === 'get-history') return { ok: true, mode: 'normal', settings: { language: 'en', theme: 'system', popupSize: 10 }, results, resultEventCount: 21 };
     if (message.type === 'get-trash') return { ok: true, results: [], resultEventCount: 7 };
     if (message.type === 'move-to-trash') { await moveGate; return { ok: true, moved: 10 }; }
     return { ok: true };
@@ -512,7 +513,7 @@ test('Trash failure does not block history rendering, count, language, or theme'
   const results = Array.from({ length: 12 }, (_, index) => result('event-' + index));
   const app = createVm(async (message) => {
     if (message.type === 'get-trash') throw new Error('trash unavailable');
-    return { ok: true, mode: 'normal', settings: { language: 'zh', theme: 'dark' }, results, resultEventCount: 12 };
+    return { ok: true, mode: 'normal', settings: { language: 'zh', theme: 'dark', popupSize: 10 }, results, resultEventCount: 12 };
   });
   app.listeners['document:DOMContentLoaded'](); await settle();
   assert.equal(app.nodes.get('historyList').children[0].children.length, 10);

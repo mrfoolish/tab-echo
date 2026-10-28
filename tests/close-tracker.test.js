@@ -93,6 +93,32 @@ test('detach then attach preserves the tab snapshot and moves it between window 
   assert.equal(subject.getState().tabSnapshotsById['2'].sourceWindowId, 20);
 });
 
+test('replacing a tab id preserves its snapshot and window position', () => {
+  const subject = tracker();
+  subject.hydrate([tab(1, 10, 0), tab(2, 10, 1)]);
+
+  const result = subject.replaceTabId(20, 1);
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.state.tabSnapshotsById['1'], undefined);
+  assert.equal(result.state.tabSnapshotsById['20'].url, 'https://example.com/1');
+  assert.deepEqual(result.state.windowSnapshotsById['10'].tabIds, ['20', '2']);
+  const closed = subject.removeTab(20, { windowId: 10, isWindowClosing: false });
+  assert.equal(closed.event.tabs[0].id, '20');
+  assert.equal(closed.event.tabs[0].url, 'https://example.com/1');
+});
+
+test('replacing an unknown or invalid tab id is a safe no-op', () => {
+  const subject = tracker();
+
+  assert.equal(subject.replaceTabId(20, 1).accepted, false);
+  subject.hydrate([tab(1, 10, 0)]);
+  assert.equal(subject.replaceTabId(20, 20).accepted, false);
+  assert.equal(subject.replaceTabId(-1, 1).accepted, false);
+  assert.equal(subject.replaceTabId(20, -1).accepted, false);
+  assert.deepEqual(subject.getState().windowSnapshotsById['10'].tabIds, ['1']);
+});
+
 test('navigation away from http removes the prior restorable snapshot', () => {
   const subject = tracker();
   subject.upsertTab(tab(1, 10, 0));
@@ -100,6 +126,32 @@ test('navigation away from http removes the prior restorable snapshot', () => {
 
   assert.equal(subject.getState().tabSnapshotsById['1'], undefined);
   assert.deepEqual(subject.getState().windowSnapshotsById['10'].tabIds, []);
+});
+
+test('a new tab pending HTTP URL survives an ordinary fast close', () => {
+  const subject = tracker();
+  subject.upsertTab(tab(1, 10, 0, {
+    title: '',
+    url: '',
+    pendingUrl: 'https://pending.example/',
+  }));
+
+  const result = subject.removeTab(1, { windowId: 10, isWindowClosing: false });
+
+  assert.equal(result.event.tabs[0].url, 'https://pending.example/');
+  assert.equal(result.event.tabs[0].title, 'https://pending.example/');
+});
+
+test('a committed HTTP URL wins over a different pending navigation', () => {
+  const subject = tracker();
+  subject.upsertTab(tab(1, 10, 0, {
+    url: 'https://committed.example/',
+    pendingUrl: 'https://pending.example/',
+  }));
+
+  const result = subject.removeTab(1, { windowId: 10, isWindowClosing: false });
+
+  assert.equal(result.event.tabs[0].url, 'https://committed.example/');
 });
 
 test('moving within a window updates the complete window ordering', () => {
@@ -569,7 +621,8 @@ test('background initialization retries after failure without concurrent duplica
       runtime: { onInstalled: event('installed'), onStartup: event('startup'), onMessage: event('message') },
       tabs: {
         onCreated: event('created'), onUpdated: event('updated'), onMoved: event('moved'),
-        onDetached: event('detached'), onAttached: event('attached'), onRemoved: event('removed'),
+        onDetached: event('detached'), onAttached: event('attached'),
+        onReplaced: event('replaced'), onRemoved: event('removed'),
         async query() {
           queryAttempts += 1;
           if (queryAttempts === 1) throw new Error('first init fails');

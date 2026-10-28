@@ -74,7 +74,7 @@ async function loadBackground({ incognito = false, indexedDbAvailable = true, lo
   const events = {
     installed: chromeEvent(), startup: chromeEvent(), alarm: chromeEvent(), message: chromeEvent(),
     created: chromeEvent(), updated: chromeEvent(), moved: chromeEvent(), detached: chromeEvent(),
-    attached: chromeEvent(), removed: chromeEvent(), windowRemoved: chromeEvent(),
+    attached: chromeEvent(), replaced: chromeEvent(), removed: chromeEvent(), windowRemoved: chromeEvent(),
   };
   const visibleTabs = tabs.map((tab) => ({ ...tab }));
   const chrome = {
@@ -94,7 +94,8 @@ async function loadBackground({ incognito = false, indexedDbAvailable = true, lo
     },
     tabs: {
       onCreated: events.created, onUpdated: events.updated, onMoved: events.moved,
-      onDetached: events.detached, onAttached: events.attached, onRemoved: events.removed,
+      onDetached: events.detached, onAttached: events.attached, onReplaced: events.replaced,
+      onRemoved: events.removed,
       async query(filter = {}) {
         if (queryGate) await queryGate;
         return visibleTabs.filter((tab) => !filter.url || tab.url === filter.url).map((tab) => ({ ...tab }));
@@ -277,6 +278,61 @@ test('ordinary close is immediately visible without waiting for a batch timer', 
   assert.equal(history.ok, true);
   assert.equal(history.statistics.totalRecords, 1);
   assert.equal(history.results[0].event.tabs[0].url, trackedTab.url);
+});
+
+test('a pending-url tab closed before commit is immediately visible', async () => {
+  const subject = await loadBackground();
+  const tab = {
+    id: 801, windowId: 80, index: 0, incognito: false,
+    title: '', url: '', pendingUrl: 'https://pending.example/',
+  };
+
+  subject.events.created.listeners[0](tab);
+  subject.events.removed.listeners[0](tab.id, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, tab.pendingUrl);
+});
+
+test('a loading pending URL is captured before an ordinary close', async () => {
+  const subject = await loadBackground();
+  const tab = {
+    id: 802, windowId: 80, index: 0, incognito: false,
+    title: '', url: '', pendingUrl: 'https://loading.example/',
+  };
+
+  subject.events.updated.listeners[0](tab.id, { status: 'loading' }, tab);
+  subject.events.removed.listeners[0](tab.id, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].url, tab.pendingUrl);
+});
+
+test('a replaced tab id remains recordable through its new id', async () => {
+  const tab = {
+    id: 1, windowId: 10, index: 0, incognito: false,
+    title: 'Prerender', url: 'https://prerender.example/',
+  };
+  const subject = await loadBackground({ tabs: [tab] });
+
+  subject.events.replaced.listeners[0](2, 1);
+  subject.events.removed.listeners[0](2, {
+    windowId: tab.windowId,
+    isWindowClosing: false,
+  });
+  const history = await subject.message({ type: 'get-history' });
+
+  assert.equal(history.statistics.totalRecords, 1);
+  assert.equal(history.results[0].event.tabs[0].id, '2');
+  assert.equal(history.results[0].event.tabs[0].url, tab.url);
 });
 
 test('history reads wait for an ordinary close already queued for persistence', async () => {
@@ -547,7 +603,7 @@ test('save-settings applies patch semantics and preserves omitted retention sett
   const saved = await subject.message({ action: 'save-settings', settings: { pageSize: 25, language: 'zh', theme: 'dark' } });
   assert.equal(saved.ok, true, JSON.stringify(saved));
   assert.deepEqual(structuredClone(subject.local.values[keys.settings]), {
-    maxRecords: 77, maxAgeDays: 9, trashMaxAgeDays: 3, popupSize: 10, pageSize: 25, language: 'zh', theme: 'dark', excludedDomains: [], settingsVersion: 2,
+    maxRecords: 77, maxAgeDays: 9, trashMaxAgeDays: 3, popupSize: 100, pageSize: 25, language: 'zh', theme: 'dark', excludedDomains: [], settingsVersion: 2,
   });
 });
 
@@ -642,7 +698,7 @@ test('get-settings returns settings and the trusted active browsing mode without
   const result = await subject.message({ type: 'get-settings', mode: 'normal' });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.mode, 'incognito');
-  assert.deepEqual(structuredClone(result.settings), { ...current, popupSize: 10, excludedDomains: [], settingsVersion: 2 });
+  assert.deepEqual(structuredClone(result.settings), { ...current, popupSize: 100, excludedDomains: [], settingsVersion: 2 });
   assert.equal(Object.hasOwn(result, 'events'), false);
   assert.equal(Object.hasOwn(result, 'results'), false);
   assert.deepEqual(subject.local.getKeys.slice(getBaseline), [keys.settings]);

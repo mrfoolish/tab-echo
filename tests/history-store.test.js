@@ -416,7 +416,7 @@ test('uses the version 2 settings defaults', () => {
     maxRecords: 10000,
     maxAgeDays: null,
     trashMaxAgeDays: 3,
-    popupSize: 10,
+    popupSize: 100,
     pageSize: 50,
     language: 'en',
     theme: 'system',
@@ -461,7 +461,7 @@ test('normalizes valid persisted settings and preserves explicit unlimited value
     maxRecords: 10000,
     maxAgeDays: null,
     trashMaxAgeDays: 3,
-    popupSize: 10,
+    popupSize: 100,
     pageSize: 50,
     language: 'en',
     theme: 'system',
@@ -485,10 +485,11 @@ test('preserves persisted null limits but treats persisted blank strings as inva
   }), DEFAULT_SETTINGS);
 });
 
-test('popup size defaults to 10 and accepts only integers from 1 to 200', () => {
+test('popup size defaults to 100, preserves saved values, and accepts only integers from 1 to 200', () => {
+  assert.equal(normalizeSettings({ popupSize: 10 }).popupSize, 10);
   assert.equal(normalizeSettings({ popupSize: 1 }).popupSize, 1);
   assert.equal(normalizeSettings({ popupSize: 200 }).popupSize, 200);
-  for (const value of [0, 201, 1.5, '', 'nope']) assert.equal(normalizeSettings({ popupSize: value }).popupSize, 10);
+  for (const value of [0, 201, 1.5, '', 'nope']) assert.equal(normalizeSettings({ popupSize: value }).popupSize, 100);
   assert.equal(validateSettingsInput({ ...DEFAULT_SETTINGS, popupSize: 200 }).valid, true);
   const invalid = validateSettingsInput({ ...DEFAULT_SETTINGS, popupSize: 201 });
   assert.equal(invalid.valid, false);
